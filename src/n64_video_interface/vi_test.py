@@ -444,9 +444,8 @@ class TestSafePatch:
         assert "dedither request neutralised" in result.reason
 
     def test_the_result_still_verifies_after_a_dither_only_patch(self):
-        from n64_video_interface.conftest import make_rom
-
         from n64_video_interface import checksum
+        from n64_video_interface.conftest import make_rom
 
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         blob, _, _, _ = rom_with_dither_request()
@@ -467,9 +466,8 @@ class TestSafePatch:
 
 class TestReseal:
     def test_writes_a_checksum_that_validates(self):
-        from n64_video_interface.conftest import make_rom
-
         from n64_video_interface import checksum
+        from n64_video_interface.conftest import make_rom
 
         sealed = vi.reseal(make_rom(size=vi.CHECKSUM_END + 0x1000))
 

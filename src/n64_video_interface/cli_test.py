@@ -12,10 +12,10 @@ from __future__ import annotations
 import json
 
 import pytest
-from n64_video_interface.conftest import make_rom
-from n64_video_interface.vi_test import mode_entry
 
 from n64_video_interface import cli, vi
+from n64_video_interface.conftest import make_rom
+from n64_video_interface.vi_test import mode_entry
 
 
 def rom_with_table(ctrl: int = 0x0000311E) -> bytes:

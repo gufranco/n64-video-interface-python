@@ -1,9 +1,9 @@
 import struct
 
 import pytest
-from n64_video_interface.conftest import entropy, make_rom
 
 from n64_video_interface import checksum
+from n64_video_interface.conftest import entropy, make_rom
 
 SIZE = checksum.START + checksum.LENGTH + 0x1000
 
