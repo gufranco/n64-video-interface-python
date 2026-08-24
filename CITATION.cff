@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+title: n64-video-interface-python
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - given-names: Gustavo
+    family-names: Franco
+    alias: gufranco
+repository-code: https://github.com/gufranco/n64-video-interface-python
+abstract: >-
+  Reads and edits the video configuration of a Nintendo 64 ROM: the VI mode
+  table that decides anti-aliasing, dithering, the divot filter and gamma, plus
+  the run-time dedither request that never appears in the table. Reseals the
+  header checksum so the result still boots, and refuses rather than guessing
+  whenever it cannot prove the edit is correct.
+keywords:
+  - nintendo-64
+  - video-interface
+  - anti-aliasing
+  - romhacking
+  - preservation
+license: MIT

@@ -1,0 +1,84 @@
+# Two scanners nothing else here covers.
+#
+# CodeQL reads the code as a graph and asks questions a linter cannot: whether a
+# value from outside reaches something that trusts it, whether a path exists that
+# leaves state half-written. This project is squarely the case that applies to. It
+# reads ROMs, patches and headers somebody else produced, indexes into them by
+# offsets those same files supply, and writes disk images from the result. A
+# crafted patch whose record offset makes it write outside the buffer, or a
+# filename that escapes the folder it was given, is exactly the question CodeQL is
+# good at and the test suite is not.
+#
+# Scorecard reads the repository rather than the code: whether the workflows pin
+# what they run, whether a release is signed, whether branches are protected. It
+# is the check that notices the project drifting away from its own standards
+# rather than the code drifting away from correct.
+name: Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analysis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          # Beyond the default set: the extended queries cover paths the default
+          # ones consider too noisy for most projects. Code that takes a path and
+          # a byte offset from an untrusted file is exactly the case they are
+          # noisy about.
+          queries: security-extended,security-and-quality
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"
+
+  scorecard:
+    name: Scorecard
+    runs-on: ubuntu-latest
+    # A pull request from a fork cannot be given the token this needs, and running
+    # it there would fail for a reason that has nothing to do with the change.
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishes the score so the badge in the README reflects something
+          # anybody can re-derive rather than a number this repository asserts.
+          publish_results: true
+
+      - uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif

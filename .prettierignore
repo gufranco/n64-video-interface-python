@@ -1,0 +1,7 @@
+node_modules/
+patches/
+dist/
+sbom.json
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

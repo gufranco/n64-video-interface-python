@@ -1,0 +1,188 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Semantic release
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install release tooling
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Recorded before semantic-release runs, so the steps after it can tell a
+      # new version from a run that released nothing. A published release must
+      # never have its signed assets rewritten by a later docs-only push.
+      - name: Record the tag that already existed
+        id: before
+        run: echo "tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm exec semantic-release
+
+      # A bill of materials for what actually ships, and a signature over it.
+      #
+      # The interesting claim about this package is not its dependency tree: it
+      # is that the tree is empty. Nothing here imports anything outside the
+      # standard library at runtime, which is what lets it run on a machine that
+      # has only Python. That is worth checking rather than asserting, so the
+      # SBOM is generated from a fresh environment holding nothing but this
+      # package and the step after it fails if anything else turns up.
+      - name: Describe what ships
+        run: |
+          python -m venv .sbom
+          .sbom/bin/pip install --quiet --disable-pip-version-check .
+          python -m pip install --disable-pip-version-check cyclonedx-bom==6.0.0
+          python -m cyclonedx_py environment .sbom \
+            --output-format json --outfile sbom.json
+        shell: bash
+
+      - name: Nothing ships but the package itself
+        run: |
+          python - <<'CHECK'
+          import json
+          import sys
+          from pathlib import Path
+
+          held = json.loads(Path("sbom.json").read_text())
+          named = sorted(one["name"] for one in held.get("components", ()))
+          # pip and setuptools are put there by venv itself rather than by this
+          # package, and which of them appears depends on the Python version:
+          # 3.11 seeds both, 3.12 seeds only pip. A third name means the package
+          # grew a real runtime dependency.
+          allowed = {"pip", "setuptools", "n64-video-interface"}
+          extra = [one for one in named if one not in allowed]
+          print(f"components: {', '.join(named) or 'none'}")
+          if extra:
+              print(f"::error title=New runtime dependency::{', '.join(extra)}")
+              sys.exit(1)
+          CHECK
+        shell: bash
+
+      # cyclonedx-py records where it found the package, which on a runner is a
+      # build path nobody can act on. It discloses nothing, since /home/runner is
+      # the fixed home on every hosted runner, but it reads like a leaked local
+      # path and it answers no question a reader of an SBOM has.
+      - name: Drop the build path from the bill of materials
+        run: |
+          python - <<'STRIP'
+          import json
+          from pathlib import Path
+
+          held = Path("sbom.json")
+          bom = json.loads(held.read_text())
+          for component in bom.get("components", ()):
+              kept = [
+                  ref
+                  for ref in component.get("externalReferences", ())
+                  if not str(ref.get("url", "")).startswith("file://")
+              ]
+              if kept:
+                  component["externalReferences"] = kept
+              else:
+                  component.pop("externalReferences", None)
+          held.write_text(json.dumps(bom, indent=2, sort_keys=True) + "\n")
+          leaked = [
+              one
+              for one in json.dumps(bom).split('"')
+              if one.startswith("file://")
+          ]
+          print(f"::error title=Build path retained::{leaked}") if leaked else None
+          raise SystemExit(1 if leaked else 0)
+          STRIP
+        shell: bash
+
+      # Keyless, so verifying it needs no key from anybody here. What the
+      # signature binds is this workflow in this repository, which says the file
+      # came from the build rather than from somebody's laptop.
+      - name: Sign it
+        run: |
+          python -m pip install --disable-pip-version-check sigstore==4.5.0
+          python -m sigstore sign sbom.json --bundle sbom.json.sigstore.json
+        shell: bash
+
+      # --match 'v*' is load-bearing. The moving `latest` tag below sits on the
+      # same commit as the newest version tag, and a bare `git describe` picks it
+      # over the version tag, which then fails as a release name because no
+      # release is called `latest`. Both steps below read this one answer so they
+      # cannot disagree about which tag was released.
+      - name: Resolve the released tag
+        id: released
+        env:
+          BEFORE: ${{ steps.before.outputs.tag }}
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          if [ -z "${tag}" ]; then
+            echo "tag=" >>"$GITHUB_OUTPUT"
+            echo "::notice title=No release::No version tag is reachable, so there is nothing to attach or move."
+          elif [ "${tag}" = "${BEFORE}" ]; then
+            echo "tag=" >>"$GITHUB_OUTPUT"
+            echo "::notice title=No release::${tag} was already published, so its assets stay as they are."
+          else
+            echo "tag=${tag}" >>"$GITHUB_OUTPUT"
+            echo "released tag: ${tag}"
+          fi
+        shell: bash
+
+      - name: Attach both to the release
+        if: steps.released.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.released.outputs.tag }}
+        run: gh release upload "${TAG}" sbom.json sbom.json.sigstore.json
+        shell: bash
+
+      # The install line in README.md and GUIDE.md points at refs/tags/latest,
+      # so it never carries a version and never goes stale. This moves that tag
+      # onto whatever was just released. Every vN.N.N tag stays immutable for
+      # anyone who wants to pin one.
+      - name: Move the latest tag onto this release
+        if: steps.released.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.released.outputs.tag }}
+        run: |
+          sha=$(git rev-list -n 1 "${TAG}")
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" \
+            -f sha="${sha}" -F force=true >/dev/null 2>&1 ||
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/latest" -f sha="${sha}" >/dev/null
+          echo "latest -> ${TAG} (${sha})"
+        shell: bash

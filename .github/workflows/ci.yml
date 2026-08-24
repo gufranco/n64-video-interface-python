@@ -1,0 +1,231 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  lint:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ruff
+        run: pipx install ruff==0.16.3
+
+      - name: Check formatting
+        run: ruff format --check .
+
+      - name: Lint
+        run: ruff check --output-format=github .
+
+      # The workflows are the one part of this repository that nothing else
+      # checks: a mistake in them is found by pushing, and the push is the thing
+      # being checked.
+      - name: Lint the workflows
+        uses: raven-actions/actionlint@v2
+
+      - name: Lint the shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --severity=style --shell=bash scripts/*.sh
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install the formatter
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Check that every JSON file is formatted
+        run: pnpm run format:check
+
+  types:
+    name: Types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install the type checker
+        run: pipx install mypy==1.18.2
+
+      # Strict, with every optional error class the version offers. This code
+      # decides which bytes of a ROM are rewritten and what the checksum is
+      # resealed to, so a None or a width crossing a boundary is exactly what
+      # this catches. The settings live in pyproject.toml so a local run and this
+      # one agree.
+      - name: Every annotation has to hold
+        run: mypy
+
+  test:
+    name: ${{ matrix.label }}, Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.11", label: Linux x86_64 }
+          - { os: ubuntu-latest, python: "3.12", label: Linux x86_64 }
+          - { os: ubuntu-latest, python: "3.13", label: Linux x86_64 }
+          - { os: ubuntu-24.04-arm, python: "3.13", label: Linux arm64 }
+          - { os: macos-15-intel, python: "3.13", label: macOS Intel }
+          - { os: macos-latest, python: "3.13", label: macOS Apple silicon }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the test tooling
+        run: python -m pip install --disable-pip-version-check pytest==8.3.4 pytest-cov==6.0.0
+
+      # No ROMs and no network. That is the state a contributor clones into, and
+      # the suite has to pass there. Every ROM the tests need is synthesised.
+      - name: Run the suite against nothing but the repository
+        run: python -m pytest tests/ -q -p no:randomly
+        env:
+          PYTHONPATH: src
+
+  platform:
+    name: Installed on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: Linux x86_64 }
+          - { os: ubuntu-24.04-arm, label: Linux arm64 }
+          - { os: macos-15-intel, label: macOS Intel }
+          - { os: macos-latest, label: macOS Apple silicon }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # Running the suite from a checkout proves the code is portable. It does
+      # not prove the thing a user gets is, so this installs the package the way
+      # they would and drives it through its own entry point.
+      - name: Install it the way a user would
+        run: python -m pip install --disable-pip-version-check .
+
+      - name: The command line runs
+        run: |
+          n64vi --help
+          n64vi --version
+
+      - name: It audits, patches and refuses, on a ROM built here
+        run: |
+          python - <<'CHECK'
+          import struct
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from n64_video_interface import vi
+
+          head = bytearray(0x40)
+          head[0:4] = b"\x80\x37\x12\x40"
+          struct.pack_into(">I", head, 0x04, 0x0000000F)
+          head[0x20:0x34] = b"CI SYNTHETIC ROM    "[:20]
+          head[0x3B] = ord("N")
+          head[0x3C:0x3E] = b"ZZ"
+          head[0x3E] = ord("E")
+          body = bytearray(bytes(head) + bytes(vi.CHECKSUM_END + 0x2000 - 0x40))
+          entry = struct.pack(">IIIIIIII", 0x0000311E, 0, 0, 0, 525, 0, 0, 0)
+          body[0x2000 : 0x2000 + len(entry)] = entry
+          Path("sample.z64").write_bytes(vi.reseal(bytes(body)))
+
+          def run(*args):
+              done = subprocess.run(["n64vi", *args], capture_output=True, text=True)
+              print(f"$ n64vi {' '.join(args)}\n{done.stdout}{done.stderr}")
+              return done
+
+          if run("audit", "sample.z64").returncode != 0:
+              print("::error title=audit failed::")
+              sys.exit(1)
+          if run("patch", "sample.z64", "--no-aa", "--output", "sharp.z64").returncode != 0:
+              print("::error title=patch failed::")
+              sys.exit(1)
+          if vi.audit(Path("sharp.z64").read_bytes()).antialiasing_on:
+              print("::error title=Anti-aliasing survived the patch::")
+              sys.exit(1)
+          if run("ips", "sample.z64", "--no-aa", "--output", "sharp.ips").returncode != 0:
+              print("::error title=ips failed::")
+              sys.exit(1)
+          if not Path("sharp.ips").read_bytes().startswith(b"PATCH"):
+              print("::error title=Not an IPS patch::")
+              sys.exit(1)
+
+          Path("plain.z64").write_bytes(bytes(head) + bytes(0x1000))
+          refused = run("patch", "plain.z64", "--no-aa", "--output", "never.z64")
+          if refused.returncode == 0 or Path("never.z64").exists():
+              print("::error title=A refusal wrote a file::")
+              sys.exit(1)
+          print("audit, patch, ips and the refusal all behaved")
+          CHECK
+        shell: bash
+
+  distribution:
+    name: The wheel carries no game data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build it
+        run: |
+          python -m pip install --disable-pip-version-check build==1.2.2.post1
+          python -m build
+
+      # This package edits copyrighted files and carries none of them. That claim
+      # is worth checking mechanically on every change rather than trusting a
+      # reviewer to notice.
+      - name: Nothing copyrighted ships
+        run: |
+          python - <<'CHECK'
+          import re
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          wheel = next(Path("dist").glob("*.whl"))
+          names = zipfile.ZipFile(wheel).namelist()
+          banned = re.compile(r"\.(z64|v64|n64|rom|aps|ips|zps|hdr|ram|eep|fla|sra|img|dat)$", re.I)
+          found = [one for one in names if banned.search(one)]
+          print(f"{len(names)} files in {wheel.name}")
+          if found:
+              print(f"::error title=Game data in the wheel::{', '.join(found)}")
+              sys.exit(1)
+          CHECK
+        shell: bash

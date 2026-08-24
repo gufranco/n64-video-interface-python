@@ -1,0 +1,101 @@
+# User supplied artifacts. This project identifies them by hash and never distributes them.
+# The manifests under src/z64kit/data/ describe these files and ARE tracked.
+# The files themselves are not, and must not be.
+
+# Game images
+*.z64
+*.v64
+*.n64
+*.rom
+*.usa
+*.pal
+*.jap
+
+# Patch payloads. These carry game code and are as unshippable as a ROM.
+*.aps
+*.ips
+*.zps
+*.ncs
+*.zp1
+*.ip1
+*.zp2
+*.ip2
+*.hdr
+
+# Save data and auxiliary files
+*.ram
+*.eep
+*.fla
+*.sra
+*.mpk
+*.zcc
+*.bem
+
+# Unit firmware and its patch database
+z64patch.dat
+z64bios*.zip
+*.bin
+
+# Disk images, whether dumped or generated
+*.img
+*.7z
+
+# Local artifact staging
+artifacts/
+patchlib/
+
+# Local working notes, not for publication
+SESSION-LOG.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Generated documents
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Superseded by the package. Kept on disk, not published: src/z64kit reproduces
+# every image these produced, verified byte for byte against recorded digests.
+/build_z64_image.py
+/generate_catalog.py
+/generate_hardware.py
+/generate_hardware.test.py
+/n64crc.py
+/scan_roms.py
+/z64_add.py
+/z64_build.py
+/z64_name.py
+/Z64-WORKFLOW.md
+
+# One machine's disk digests and one drive's read timings. Neither generalises,
+# so publishing them would invite conclusions the data cannot support.
+/golden-images.txt
+/zip100-read-profile.csv
+
+# Planning notes
+/specs/
+
+# Type checker cache
+.mypy_cache/
+
+# uv writes this when a contributor runs `uv run`; the project builds with pip
+uv.lock

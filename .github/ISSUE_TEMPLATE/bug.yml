@@ -1,0 +1,41 @@
+name: Something does not work
+description: A command failed, produced the wrong output, or wrote the wrong bytes.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not attach a ROM, a patch, or a disk image. If a specific file is
+        involved, its SHA-256 identifies it without sending it.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed. Paste the output rather than describing it.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `z64kit doctor`, or the release tag you installed.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and Python version
+      placeholder: macOS 15, Python 3.13
+    validations:
+      required: true
