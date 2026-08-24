@@ -313,7 +313,7 @@ class TestSafePatch:
     """The guarded entry point. Refuses anything it cannot prove is correct."""
 
     def rom_with_table(self, ctrl=0x0000311E):
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         base[0x2000 : 0x2000 + len(mode_entry(ctrl=ctrl))] = mode_entry(ctrl=ctrl)
@@ -328,7 +328,7 @@ class TestSafePatch:
         assert cic is not None
 
     def test_refuses_a_rom_with_no_mode_table(self):
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         result = vi.safe_patch(
             vi.reseal(make_rom(size=vi.CHECKSUM_END + 0x2000)), antialiasing=False
@@ -430,7 +430,7 @@ class TestSafePatch:
     def test_the_dither_filter_needs_no_mode_table(self):
         """GoldenEye 007 carries the routine and no table, so requiring one would
         exclude exactly the ROMs that most need this."""
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         blob, _, _, _ = rom_with_dither_request()
@@ -444,7 +444,7 @@ class TestSafePatch:
         assert "dedither request neutralised" in result.reason
 
     def test_the_result_still_verifies_after_a_dither_only_patch(self):
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         from n64_video_interface import checksum
 
@@ -467,7 +467,7 @@ class TestSafePatch:
 
 class TestReseal:
     def test_writes_a_checksum_that_validates(self):
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         from n64_video_interface import checksum
 
@@ -476,7 +476,7 @@ class TestReseal:
         assert checksum.verify(sealed)[0] is True
 
     def test_only_touches_the_two_checksum_words(self):
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         original = make_rom(size=vi.CHECKSUM_END + 0x1000)
         sealed = vi.reseal(original)
@@ -519,7 +519,7 @@ class TestEmitIps:
             vi.make_ips([(0x1000000, 0, 1)])
 
     def test_applying_the_patch_reproduces_the_patched_rom(self):
-        from tests.conftest import make_rom
+        from n64_video_interface.conftest import make_rom
 
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         base[0x2000 : 0x2000 + len(mode_entry())] = mode_entry()
@@ -671,3 +671,210 @@ class TestClearDitherRequests:
 
         assert out == blob
         assert changes == ()
+
+
+class TestTheDecodedFieldsNothingElseReads:
+    """Every field of a decoded control word, including the ones no caller uses.
+
+    `pixel_advance` and `type_name` exist because the word carries them and a
+    reader auditing a ROM wants the whole picture, not the subset this library
+    happens to edit. A field nothing exercises is a field free to be wrong.
+    """
+
+    def test_pixel_advance_comes_from_its_own_nibble(self):
+        assert vi.decode_ctrl(0x0000311E | (0xB << 12)).pixel_advance == 0xB
+
+    def test_the_pixel_type_is_named(self):
+        assert vi.decode_ctrl(0x0000311E).type_name == "16-bit"
+
+    def test_every_pixel_type_has_a_name(self):
+        for value, expected in vi.PIXEL_TYPES.items():
+            assert vi.decode_ctrl((0x0000311E & ~vi.CTRL_TYPE_MASK) | value).type_name == expected
+
+
+class TestTurningASettingBackOn:
+    """The switches accept True as well as False, and only False is ever asked for.
+
+    Nothing in the command line turns anti-aliasing back on, so the True branch
+    of the same function went unexercised while sitting one character away from
+    the branch everything depends on.
+    """
+
+    def test_anti_aliasing_can_be_asked_for_rather_than_removed(self):
+        off = vi.apply_changes(0x0000311E, antialiasing=False)
+
+        back = vi.apply_changes(off, antialiasing=True)
+
+        assert vi.decode_ctrl(off).antialiasing is False
+        assert vi.decode_ctrl(back).antialiasing is True
+
+    def test_a_flag_left_unset_changes_nothing(self):
+        assert vi.apply_changes(0x0000311E) == 0x0000311E
+
+
+class TestResealRefusals:
+    def test_a_rom_too_short_to_checksum_is_refused(self):
+        with pytest.raises(ValueError, match="too short to checksum"):
+            vi.reseal(bytes(0x100))
+
+    def test_a_rom_the_checksum_cannot_be_computed_over_is_refused(self, monkeypatch):
+        from n64_video_interface import checksum as module
+
+        monkeypatch.setattr(module, "compute", lambda rom, cic: None)
+
+        with pytest.raises(ValueError, match="could not be computed"):
+            vi.reseal(bytes(vi.CHECKSUM_END))
+
+
+class TestReportConvenience:
+    def test_a_rom_with_a_divot_filter_is_reported_as_blurring(self):
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        entry = mode_entry(ctrl=0x0000311E)
+        data[0x2000 : 0x2000 + len(entry)] = entry
+
+        assert vi.audit(vi.reseal(bytes(data))).blurs is True
+
+    def test_a_rom_with_no_table_blurs_as_far_as_this_can_tell(self):
+        from n64_video_interface.conftest import make_rom
+
+        assert vi.audit(make_rom()).blurs is False
+
+
+class TestSafePatchRefusesAnEditThatDidNotTake:
+    """The last guard, which only fires if resealing moved a byte it should not.
+
+    It cannot happen through the public path, so it is reached by making reseal
+    return the original. That is the point of the check: it is the one that
+    catches a reseal implementation going wrong, and a guard nothing exercises
+    is a guard nobody knows works.
+    """
+
+    def test_it_refuses_rather_than_returning_data(self, monkeypatch):
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        entry = mode_entry(ctrl=0x0000311E)
+        data[0x2000 : 0x2000 + len(entry)] = entry
+        rom = vi.reseal(bytes(data))
+
+        monkeypatch.setattr(vi, "reseal", lambda blob, cic=None: rom)
+
+        result = vi.safe_patch(rom, antialiasing=False)
+
+        assert result.applied is False
+        assert "did not take" in result.reason
+        assert result.data == b""
+
+
+class TestTheScannerRejectsANearMiss:
+    """A vsync value can appear in a ROM without a mode table around it.
+
+    525 as a big endian word is four ordinary bytes. The scanner finds every
+    occurrence and then has to decide, and the deciding is the part worth
+    testing: a hit whose preceding word is not a plausible control value has to
+    be dropped rather than reported as a mode.
+    """
+
+    def test_a_vsync_value_with_no_plausible_control_word_is_not_a_mode(self):
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        at = 0x2000 + vi.VSYNC_OFFSET_FROM_CTRL
+        struct.pack_into(">I", data, 0x2000, 0xDEADBEEF)
+        struct.pack_into(">I", data, at, 525)
+
+        assert vi.find_mode_tables(bytes(data)) == ()
+
+
+class TestARequestAlreadyNeutralised:
+    """A guard whose immediate is already zero needs no edit and gets none.
+
+    The loop reads the word, masks it, and writes only when the mask changed
+    something. Without a case where it did not, the skip was never taken and a
+    patch that rewrote an already-clear guard would have looked identical.
+    """
+
+    def request_at(self, offset):
+        return vi.DitherRequest(
+            setter=offset - 8, branch=offset + 8, guard=offset, target=offset, flag=1
+        )
+
+    def test_clearing_it_reports_no_change(self, monkeypatch):
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        struct.pack_into(">I", data, 0x3000, 0xABCD0000)
+        monkeypatch.setattr(vi, "find_dither_requests", lambda rom: (self.request_at(0x3000),))
+
+        out, changes = vi.clear_dither_requests(bytes(data))
+
+        assert changes == ()
+        assert out == bytes(data)
+
+    def test_safe_patch_counts_it_as_nothing_to_do(self, monkeypatch):
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        struct.pack_into(">I", data, 0x3000, 0xABCD0000)
+        rom = vi.reseal(bytes(data))
+        monkeypatch.setattr(vi, "find_dither_requests", lambda blob: (self.request_at(0x3000),))
+
+        result = vi.safe_patch(rom, dither_filter=False)
+
+        assert result.applied is False
+        assert result.reason == vi.NO_CHANGE_NEEDED
+
+
+class TestResealProducingSomethingThatDoesNotValidate:
+    def test_safe_patch_refuses_to_hand_it_back(self, monkeypatch):
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        entry = mode_entry(ctrl=0x0000311E)
+        data[0x2000 : 0x2000 + len(entry)] = entry
+        rom = vi.reseal(bytes(data))
+
+        broken = bytearray(rom)
+        struct.pack_into(">I", broken, 0x10, 0xFFFFFFFF)
+        monkeypatch.setattr(vi, "reseal", lambda blob, cic=None: bytes(broken))
+
+        result = vi.safe_patch(rom, antialiasing=False)
+
+        assert result.applied is False
+        assert "failed to validate" in result.reason
+
+
+class TestABranchWithNoAndiFeedingIt:
+    """A branch on zero whose register was never masked is not a dither guard.
+
+    The scan anchors on the branch and then looks backwards for the `andi` that
+    produced what it tested. Finding the branch and not the `andi` means this is
+    some other branch, and the answer has to be nothing rather than the nearest
+    `andi` that happens to be in range, which is what anchoring exists to avoid.
+
+    Reached directly because building a ROM that gets this far through
+    `find_dither_requests` means hand-assembling the whole preceding pattern,
+    which would test the assembler rather than the refusal.
+    """
+
+    def test_the_guard_search_gives_nothing(self):
+        rom = bytearray(0x100)
+        setter = 0x80
+        branch = struct.pack(">I", (vi.OP_BEQ << 26) | (8 << 21) | 4)
+        rom[setter - 4 : setter] = branch
+
+        assert vi._guard_for(bytes(rom), setter, 0) is None
+
+    def test_and_the_same_branch_with_an_andi_before_it_is_a_guard(self):
+        rom = bytearray(0x100)
+        setter = 0x80
+        rom[setter - 4 : setter] = struct.pack(">I", (vi.OP_BEQ << 26) | (8 << 21) | 4)
+        rom[setter - 12 : setter - 8] = struct.pack(">I", (vi.OP_ANDI << 26) | (8 << 16) | 0x0040)
+
+        found = vi._guard_for(bytes(rom), setter, 0)
+
+        assert found is not None
+        assert found[1] == setter - 12
+        assert found[3] == 0x0040

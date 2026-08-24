@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from tests.conftest import make_rom
-from tests.test_vi import mode_entry
+from n64_video_interface.conftest import make_rom
+from n64_video_interface.vi_test import mode_entry
 
 from n64_video_interface import cli, vi
 
@@ -192,3 +192,46 @@ class TestFailingToWrite:
 
         assert code == 1
         assert not out.exists()
+
+
+class TestTheEntryPoints:
+    """The two lines between a shell and `main`, which nothing reached.
+
+    `python -m n64_video_interface` and the console script both end up in the
+    same function, and the glue in front of it is small enough to look obviously
+    right and still be the thing that breaks an install.
+    """
+
+    def test_the_module_entry_point_imports_the_same_main(self):
+        import importlib
+
+        module = importlib.import_module("n64_video_interface.__main__")
+
+        assert module.main is cli.main
+
+    def test_a_parser_exit_becomes_a_return_code(self, monkeypatch):
+        def leave(_args):
+            raise SystemExit(3)
+
+        monkeypatch.setattr(cli, "build_parser", lambda: _parser_returning(leave))
+
+        assert cli.main(["audit", "whatever"]) == 3
+
+    def test_a_clean_parser_exit_is_a_zero(self, monkeypatch):
+        def leave(_args):
+            raise SystemExit(None)
+
+        monkeypatch.setattr(cli, "build_parser", lambda: _parser_returning(leave))
+
+        assert cli.main(["audit", "whatever"]) == 0
+
+
+def _parser_returning(func):
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="n64vi")
+    sub = parser.add_subparsers(dest="command")
+    one = sub.add_parser("audit")
+    one.add_argument("rom")
+    one.set_defaults(func=func)
+    return parser

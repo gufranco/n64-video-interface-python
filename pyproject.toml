@@ -44,13 +44,20 @@ pattern = "VERSION = \"(?P<version>[^\"]+)\""
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/n64_video_interface"]
+# The tests sit beside the code, so they would ship without this.
+exclude = ["*_test.py", "conftest.py"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/n64_video_interface", "tests", "README.md", "LICENSE.txt", "pyproject.toml"]
 exclude = ["**/*.z64", "**/*.v64", "**/*.n64", "**/*.ips", "**/*.aps"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Tests live beside the code they test, as `<module>_test.py`. pytest already
+# collects that name, and it is the one shape that does not collide: a file
+# called `<module>.test.py` is imported as `<package>.<module>.test`, which
+# turns `<package>.<module>` into a namespace package and shadows the module
+# under test with an empty one.
+testpaths = ["src"]
 addopts = "-q --strict-markers --strict-config"
 # So `pytest` works from a clean checkout with no environment set up.
 pythonpath = ["src"]
@@ -58,12 +65,23 @@ pythonpath = ["src"]
 [tool.coverage.run]
 branch = true
 source = ["src/n64_video_interface"]
+omit = ["*_test.py", "*/conftest.py"]
 
 [tool.coverage.report]
-fail_under = 95
 show_missing = true
 skip_covered = true
-exclude_lines = ["if __name__ == .__main__.:", "raise NotImplementedError"]
+exclude_also = [
+  # The guard hands argv to a function that is itself tested, so there is
+  # nothing behind it left to exercise. Importing the module to reach the guard
+  # would run the tool rather than test it.
+  'if __name__ == "__main__":',
+  # A type checking block never runs, by definition. Python 3.14 drops it before
+  # coverage can see it and earlier versions do not, so leaving it in would make
+  # the gate mean one thing on the newest runtime and another on the oldest.
+  'if TYPE_CHECKING:',
+  "raise NotImplementedError",
+]
+fail_under = 100
 
 [tool.ruff]
 line-length = 100

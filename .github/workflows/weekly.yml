@@ -70,9 +70,9 @@ jobs:
         run: mypy
 
       - name: The suite, against nothing but the repository
-        run: python -m pytest tests/ -q -p no:randomly
+        run: python -m pytest -q -p no:randomly
 
       # The claim that holds without any user files: a resealed ROM verifies
       # under the boot chip it was sealed for, on every supported runtime.
       - name: The checksum claim still holds
-        run: python -m pytest tests/test_checksum.py tests/test_vi.py -q -p no:randomly
+        run: python -m pytest src/n64_video_interface/checksum_test.py src/n64_video_interface/vi_test.py -q -p no:randomly

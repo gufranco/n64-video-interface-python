@@ -9,8 +9,8 @@
 
 [![CI](https://github.com/gufranco/n64-video-interface-python/actions/workflows/ci.yml/badge.svg)](https://github.com/gufranco/n64-video-interface-python/actions/workflows/ci.yml)
 [![Analysis](https://github.com/gufranco/n64-video-interface-python/actions/workflows/analysis.yml/badge.svg)](https://github.com/gufranco/n64-video-interface-python/actions/workflows/analysis.yml)
-[![Coverage](https://img.shields.io/badge/coverage-97%25%20statement%20%2B%20branch-brightgreen)](#tests)
-[![Tests](https://img.shields.io/badge/tests-134-brightgreen)](#tests)
+[![Coverage](https://img.shields.io/badge/coverage-100%25%20statement%20%2B%20branch-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/tests-160-brightgreen)](#tests)
 [![Types](https://img.shields.io/badge/mypy-strict-blue)](pyproject.toml)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-zero-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.txt)
@@ -26,7 +26,7 @@
   <a href="https://github.com/gufranco/n64-video-interface-python/issues">Issues</a>
 </p>
 
-**3** commands · **134** tests · **97%** statement and branch coverage · **zero** runtime dependencies · types checked **strict**
+**3** commands · **160** tests · **100%** statement and branch coverage · **zero** runtime dependencies · types checked **strict**
 
 ```console
 $ n64vi audit "Super Mario 64 (USA).z64"
@@ -143,7 +143,7 @@ else:
 
 ## Tests
 
-134 tests, 97% statement and branch coverage, gated in CI rather than asserted here. Every ROM the suite needs is synthesised, so it passes in a fresh clone with no game files and no network.
+160 tests, 100% statement and branch coverage, gated in CI rather than asserted here. Each test file sits beside the module it tests, as `<module>_test.py`. Every ROM the suite needs is synthesised, so it passes in a fresh clone with no game files and no network.
 
 ```bash
 pytest

@@ -108,7 +108,7 @@ jobs:
       # No ROMs and no network. That is the state a contributor clones into, and
       # the suite has to pass there. Every ROM the tests need is synthesised.
       - name: Run the suite against nothing but the repository
-        run: python -m pytest tests/ -q -p no:randomly
+        run: python -m pytest -q -p no:randomly
 
   platform:
     name: Installed on ${{ matrix.label }}
@@ -216,10 +216,10 @@ jobs:
       - name: Install the test tooling
         run: python -m pip install --disable-pip-version-check pytest==8.3.4 pytest-cov==6.0.0
 
-      # A gate nothing runs is a number free to drift. This is the job that makes
-      # the threshold in pyproject.toml mean something.
+      # A gate nothing runs is a number free to drift. The threshold is 100%
+      # statement and branch, so this job is what keeps it there.
       - name: Coverage must clear the gate in pyproject.toml
-        run: python -m pytest tests/ -q -p no:randomly --cov --cov-report=term-missing
+        run: python -m pytest -q -p no:randomly --cov --cov-report=term-missing
 
   distribution:
     name: The wheel carries no game data

@@ -1,7 +1,7 @@
 import struct
 
 import pytest
-from tests.conftest import entropy, make_rom
+from n64_video_interface.conftest import entropy, make_rom
 
 from n64_video_interface import checksum
 
