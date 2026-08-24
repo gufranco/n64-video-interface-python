@@ -157,7 +157,19 @@ jobs:
           head[0x3C:0x3E] = b"ZZ"
           head[0x3E] = ord("E")
           body = bytearray(bytes(head) + bytes(vi.CHECKSUM_END + 0x2000 - 0x40))
-          entry = struct.pack(">IIIIIIII", 0x0000311E, 0, 0, 0, 525, 0, 0, 0)
+          entry = struct.pack(
+              ">IIIIIIIIII",
+              0x00000001,
+              0x0000311E,
+              320,
+              0x03E52239,
+              525,
+              3093,
+              0x0C150C15,
+              0x006C02EC,
+              0x00000200,
+              0x00000000,
+          )
           body[0x2000 : 0x2000 + len(entry)] = entry
           Path("sample.z64").write_bytes(vi.reseal(bytes(body)))
 
