@@ -1,4 +1,5 @@
 import struct
+import zlib
 
 import pytest
 
@@ -82,3 +83,46 @@ class TestVerify:
 
         assert ok is False
         assert cic is None
+
+
+class TestNamingTheChipFromTheBootCode:
+    """The header checksum names a chip only when the header agrees with the data,
+    and it cannot separate 6101 from 6102 at all because those two share a seed.
+    The boot code answers both cases: it is chip-specific and it sits outside the
+    range the checksum covers, so an edited header leaves it intact."""
+
+    def rom_with_boot_code(self, code: bytes) -> bytes:
+        base = bytearray(make_rom(size=0x101000))
+        base[0x40 : 0x40 + len(code)] = code
+        return bytes(base)
+
+    def test_it_names_the_chip_whose_boot_code_matches(self, monkeypatch):
+        code = (bytes(range(256)) * 16)[: checksum.IPL3_END - checksum.IPL3_START]
+        crc = zlib.crc32(code) & 0xFFFFFFFF
+        monkeypatch.setitem(checksum.IPL3_CRC32, crc, "6103")
+
+        assert checksum.boot_chip(self.rom_with_boot_code(code)) == "6103"
+
+    def test_boot_code_it_does_not_know_names_no_chip(self):
+        code = (bytes(range(255, -1, -1)) * 16)[: checksum.IPL3_END - checksum.IPL3_START]
+
+        assert checksum.boot_chip(self.rom_with_boot_code(code)) is None
+
+    def test_a_rom_too_short_to_hold_boot_code_names_no_chip(self):
+        assert checksum.boot_chip(bytes(0x100)) is None
+
+    def test_the_published_table_is_pinned(self):
+        """These are the values every emulator keys on. A typo here would name the
+        wrong chip on a real cartridge, which is the one error worth pinning."""
+        assert checksum.IPL3_CRC32 == {
+            0x6170A4A1: "6101",
+            0x009E9EA3: "7102",
+            0x90BB6CB5: "6102",
+            0x0B050EE0: "6103",
+            0x98BC2C86: "6105",
+            0xACC8580A: "6106",
+        }
+
+    def test_it_separates_the_two_chips_the_checksum_cannot(self):
+        assert checksum.SEEDS["6101"] == checksum.SEEDS["6102"]
+        assert len(set(checksum.IPL3_CRC32.values())) == len(checksum.IPL3_CRC32)

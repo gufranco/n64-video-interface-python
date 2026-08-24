@@ -114,15 +114,11 @@ enable_error_code = [
   "unused-awaitable",
 ]
 files = ["src/n64_video_interface"]
+# The tests sit beside the code and build deliberately malformed inputs to
+# prove it refuses them, so they hand wrong types in on purpose. Checking them
+# strictly would mean annotating a lie. mypy rejects a wildcard inside a module
+# component, so the exclusion is by path rather than by module name.
 exclude = "(_test|conftest)\\.py$"
-
-[[tool.mypy.overrides]]
-# The tests build deliberately malformed inputs to prove the code refuses them,
-# so they hand wrong types in on purpose. Checking them strictly would mean
-# annotating a lie. They sit inside the package now, so they are named rather
-# than excluded by living in a directory of their own.
-module = ["n64_video_interface.*_test", "n64_video_interface.conftest"]
-ignore_errors = true
 
 [tool.ruff.lint.per-file-ignores]
 "*_test.py" = ["S101"]
