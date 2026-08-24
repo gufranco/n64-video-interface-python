@@ -109,8 +109,6 @@ jobs:
       # the suite has to pass there. Every ROM the tests need is synthesised.
       - name: Run the suite against nothing but the repository
         run: python -m pytest tests/ -q -p no:randomly
-        env:
-          PYTHONPATH: src
 
   platform:
     name: Installed on ${{ matrix.label }}
@@ -192,6 +190,24 @@ jobs:
           print("audit, patch, ips and the refusal all behaved")
           CHECK
         shell: bash
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install the test tooling
+        run: python -m pip install --disable-pip-version-check pytest==8.3.4 pytest-cov==6.0.0
+
+      # A gate nothing runs is a number free to drift. This is the job that makes
+      # the threshold in pyproject.toml mean something.
+      - name: Coverage must clear the gate in pyproject.toml
+        run: python -m pytest tests/ -q -p no:randomly --cov --cov-report=term-missing
 
   distribution:
     name: The wheel carries no game data
