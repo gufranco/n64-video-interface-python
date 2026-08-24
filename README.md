@@ -153,11 +153,15 @@ The matrix runs Python 3.11 through 3.13 on Linux x86_64 and arm64 and on macOS 
 
 A weekly job re-runs everything against unpinned tooling, which is what catches a linter or a type checker changing its mind about code nobody touched.
 
-## What has not been verified
+## What has been verified, and what has not
 
 The mode-table layout and the dedither request pattern were established by scanning retail ROMs and requiring every candidate to satisfy several independent structural checks before being treated as a table. The checksum implementation is verified against every boot chip in the test suite.
 
-None of it has been run on original hardware.
+Patched ROMs produced by this have booted and run on real Nintendo 64 hardware.
+
+What has not been established is how broadly that holds. The mode table is found by scanning rather than by reading a fixed offset, and the library has not been run against every ROM of every region. A dump whose table this cannot prove is a table is refused rather than edited, so the failure mode is a game that goes unpatched rather than one that breaks, but a game that is patched and looks wrong is still possible and has not been ruled out for every title.
+
+Test before committing to a batch, and please open an issue with the title and region if a game is refused or comes out wrong. That is the fastest way for the scanner to learn a case it does not yet handle.
 
 ## License
 
