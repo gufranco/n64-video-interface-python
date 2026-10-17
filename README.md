@@ -18,11 +18,11 @@
 </div>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> &nbsp;|&nbsp;
-  <a href="#what-actually-causes-the-blur">What causes the blur</a> &nbsp;|&nbsp;
-  <a href="#why-the-checksum-is-the-hard-part">Why the checksum is hard</a> &nbsp;|&nbsp;
-  <a href="#rom-or-patch">ROM or patch</a> &nbsp;|&nbsp;
-  <a href="#every-guard-refuses-rather-than-guesses">The guards</a> &nbsp;|&nbsp;
+  <a href="#quick-start">Quick start</a> |
+  <a href="#what-actually-causes-the-blur">What causes the blur</a> |
+  <a href="#why-the-checksum-is-the-hard-part">Why the checksum is hard</a> |
+  <a href="#rom-or-patch">ROM or patch</a> |
+  <a href="#every-guard-refuses-rather-than-guesses">The guards</a> |
   <a href="https://github.com/gufranco/n64-video-interface-python/issues">Issues</a>
 </p>
 
