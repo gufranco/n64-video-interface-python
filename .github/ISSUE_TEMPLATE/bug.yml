@@ -28,7 +28,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: The output of `z64kit doctor`, or the release tag you installed.
+      description: The output of `n64vi --version`, or the release tag you installed.
     validations:
       required: true
 
