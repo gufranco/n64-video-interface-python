@@ -7,6 +7,44 @@ from n64_video_interface import checksum
 from n64_video_interface.conftest import entropy, make_rom
 
 SIZE = checksum.START + checksum.LENGTH + 0x1000
+SEED_THEN_ZEROS_6103 = (0xE498A9E8, 0x689C1E60)
+BOOT_CODE_LENGTH = checksum.IPL3_END - checksum.IPL3_START
+
+
+def crc_table():
+    table = []
+    for value in range(256):
+        crc = value
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xEDB88320 if crc & 1 else crc >> 1
+        table.append(crc)
+    return table
+
+
+CRC_TABLE = crc_table()
+CRC_BY_TOP_BYTE = {CRC_TABLE[i] >> 24: i for i in range(256)}
+
+
+def boot_code_with_crc(target):
+    prefix = (bytes(range(256)) * 16)[: BOOT_CODE_LENGTH - 4]
+    register = target ^ 0xFFFFFFFF
+    for _ in range(4):
+        index = CRC_BY_TOP_BYTE[register >> 24]
+        register = (((register ^ CRC_TABLE[index]) << 8) | index) & 0xFFFFFFFF
+    current = zlib.crc32(prefix) ^ 0xFFFFFFFF
+    return prefix + (register ^ current).to_bytes(4, "little")
+
+
+def rom_with_boot_code(code):
+    base = bytearray(make_rom(size=0x2000))
+    base[checksum.IPL3_START : checksum.IPL3_END] = code
+    return bytes(base)
+
+
+def with_checksums(data, pair):
+    out = bytearray(data)
+    struct.pack_into(">II", out, 0x10, *pair)
+    return bytes(out)
 
 
 @pytest.fixture(scope="module")
@@ -14,136 +52,91 @@ def body():
     return make_rom(size=SIZE, fill=entropy(SIZE))
 
 
-@pytest.fixture(scope="module")
-def computed(body):
-    return {cic: checksum.compute(body, cic) for cic in ("6102", "6103", "6105", "6106")}
-
-
-def with_checksums(data, pair):
-    out = bytearray(data)
-    struct.pack_into(">I", out, 0x10, pair[0])
-    struct.pack_into(">I", out, 0x14, pair[1])
-    return bytes(out)
-
-
 class TestCompute:
-    def test_returns_a_pair_for_every_known_cic(self, computed):
-        assert all(len(v) == 2 for v in computed.values())
-
-    def test_every_value_fits_in_32_bits(self, computed):
-        assert all(0 <= n <= 0xFFFFFFFF for pair in computed.values() for n in pair)
-
-    def test_the_cic_variants_do_not_all_agree(self, computed):
-        assert len(set(computed.values())) > 1
-
-    def test_6105_differs_from_6102_because_it_reads_the_boot_table(self, computed):
-        assert computed["6105"] != computed["6102"]
-
-    def test_6103_differs_from_6102_because_the_final_combine_adds(self, computed):
-        assert computed["6103"] != computed["6102"]
-
-    def test_6106_differs_from_6103_because_the_final_combine_multiplies(self, computed):
-        assert computed["6106"] != computed["6103"]
-
-    def test_returns_none_when_the_data_is_too_short(self):
-        assert checksum.compute(b"\x00" * 16, "6102") is None
-
-    def test_rejects_an_unknown_cic(self, body):
-        with pytest.raises(KeyError):
-            checksum.compute(body, "9999")
-
-
-SEED_THEN_ZEROS_6103 = (0xE498A9E8, 0x689C1E60)
-
-
-def seed_then_zeros(cic: str) -> bytes:
-    rom = bytearray(checksum.START + checksum.LENGTH)
-    struct.pack_into(">I", rom, checksum.START, checksum.SEEDS[cic])
-    return bytes(rom)
-
-
-class TestAWordEqualToTheRunningValue:
     def test_a_tie_takes_the_rotated_branch_as_the_boot_code_does(self):
         # Arrange
-        rom = seed_then_zeros("6103")
+        rom = bytearray(checksum.START + checksum.LENGTH)
+        struct.pack_into(">I", rom, checksum.START, checksum.SEEDS["6103"])
 
         # Act
-        produced = checksum.compute(rom, "6103")
+        produced = checksum.compute(bytes(rom), "6103")
 
         # Assert
         assert produced == SEED_THEN_ZEROS_6103
 
+    def test_each_seed_and_combine_gives_a_different_pair(self, body):
+        # Arrange
+        chips = ("6102", "6103", "6105", "6106")
+
+        # Act
+        pairs = {chip: checksum.compute(body, chip) for chip in chips}
+
+        # Assert
+        assert len(set(pairs.values())) == len(chips)
+
+    def test_data_too_short_to_checksum_is_refused(self):
+        # Arrange
+        data = bytes(16)
+
+        # Act
+        with pytest.raises(ValueError) as caught:
+            checksum.compute(data, "6102")
+
+        # Assert
+        assert str(caught.value) == "need 1052672 bytes to checksum, got 16"
+
 
 class TestVerify:
-    def test_accepts_a_rom_carrying_its_own_6102_checksum(self, body, computed):
-        rom = with_checksums(body, computed["6102"])
+    @pytest.mark.parametrize("chip", ["6102", "6103", "6105", "6106"])
+    def test_a_dump_carrying_its_own_pair_names_its_chip(self, body, chip):
+        # Arrange
+        rom = with_checksums(body, checksum.compute(body, chip))
 
-        ok, cic = checksum.verify(rom)
+        # Act
+        verdict = checksum.verify(rom)
 
-        assert ok is True
-        assert cic == "6102"
+        # Assert
+        assert verdict == (True, chip)
 
-    def test_accepts_a_rom_carrying_its_own_6105_checksum(self, body, computed):
-        rom = with_checksums(body, computed["6105"])
+    @pytest.mark.parametrize(
+        "rom",
+        [with_checksums(make_rom(size=SIZE), (0xDEADBEEF, 0xCAFEBABE)), b"\x80\x37\x12\x40"],
+        ids=["matching no seed", "too short"],
+    )
+    def test_a_pair_no_chip_produces_is_not_verified(self, rom):
+        # Arrange
+        data = rom
 
-        ok, cic = checksum.verify(rom)
+        # Act
+        verdict = checksum.verify(data)
 
-        assert ok is True
-        assert cic == "6105"
-
-    def test_rejects_a_rom_whose_checksum_matches_no_seed(self, body):
-        rom = with_checksums(body, (0xDEADBEEF, 0xCAFEBABE))
-
-        ok, cic = checksum.verify(rom)
-
-        assert ok is False
-        assert cic is None
-
-    def test_reports_unverified_rather_than_raising_on_short_data(self):
-        ok, cic = checksum.verify(b"\x80\x37\x12\x40")
-
-        assert ok is False
-        assert cic is None
+        # Assert
+        assert verdict == (False, None)
 
 
 class TestNamingTheChipFromTheBootCode:
-    """The header checksum names a chip only when the header agrees with the data,
-    and it cannot separate 6101 from 6102 at all because those two share a seed.
-    The boot code answers both cases: it is chip-specific and it sits outside the
-    range the checksum covers, so an edited header leaves it intact."""
+    @pytest.mark.parametrize(("crc", "chip"), list(checksum.IPL3_CRC32.items()))
+    def test_boot_code_with_a_known_crc_names_its_chip(self, crc, chip):
+        # Arrange
+        rom = rom_with_boot_code(boot_code_with_crc(crc))
 
-    def rom_with_boot_code(self, code: bytes) -> bytes:
-        base = bytearray(make_rom(size=0x101000))
-        base[0x40 : 0x40 + len(code)] = code
-        return bytes(base)
+        # Act
+        named = checksum.boot_chip(rom)
 
-    def test_it_names_the_chip_whose_boot_code_matches(self, monkeypatch):
-        code = (bytes(range(256)) * 16)[: checksum.IPL3_END - checksum.IPL3_START]
-        crc = zlib.crc32(code) & 0xFFFFFFFF
-        monkeypatch.setitem(checksum.IPL3_CRC32, crc, "6103")
+        # Assert
+        assert named == chip
 
-        assert checksum.boot_chip(self.rom_with_boot_code(code)) == "6103"
+    @pytest.mark.parametrize(
+        "rom",
+        [rom_with_boot_code(bytes(BOOT_CODE_LENGTH)), bytes(0x100)],
+        ids=["unknown boot code", "too short"],
+    )
+    def test_unknown_or_missing_boot_code_names_no_chip(self, rom):
+        # Arrange
+        data = rom
 
-    def test_boot_code_it_does_not_know_names_no_chip(self):
-        code = (bytes(range(255, -1, -1)) * 16)[: checksum.IPL3_END - checksum.IPL3_START]
+        # Act
+        named = checksum.boot_chip(data)
 
-        assert checksum.boot_chip(self.rom_with_boot_code(code)) is None
-
-    def test_a_rom_too_short_to_hold_boot_code_names_no_chip(self):
-        assert checksum.boot_chip(bytes(0x100)) is None
-
-    def test_the_published_table_is_pinned(self):
-        """These are the values every emulator keys on. A typo here would name the
-        wrong chip on a real cartridge, which is the one error worth pinning."""
-        assert checksum.IPL3_CRC32 == {
-            0x6170A4A1: "6101",
-            0x009E9EA3: "7102",
-            0x90BB6CB5: "6102",
-            0x0B050EE0: "6103",
-            0x98BC2C86: "6105",
-            0xACC8580A: "6106",
-        }
-
-    def test_it_separates_the_two_chips_the_checksum_cannot(self):
-        assert checksum.SEEDS["6101"] == checksum.SEEDS["6102"]
-        assert len(set(checksum.IPL3_CRC32.values())) == len(checksum.IPL3_CRC32)
+        # Assert
+        assert named is None

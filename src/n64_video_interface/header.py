@@ -1,16 +1,3 @@
-"""N64 cartridge header parsing.
-
-The header is 64 bytes and carries everything needed to identify a dump exactly:
-the internal title, the cartridge code, the region, the revision and both
-checksums. Those 64 bytes are also the key most patch formats bind to, which is
-why `identity_key` exists as a named concept rather than a slice at the call
-site.
-
-The byte order is read from the magic word and never inferred from the file
-extension, because a byteswapped dump carrying a big endian extension is a real
-and silent failure mode on the hardware.
-"""
-
 from __future__ import annotations
 
 import struct
@@ -19,15 +6,15 @@ from dataclasses import dataclass
 from .byteorder import ByteOrder, detect, swap
 
 HEADER_SIZE = 0x40
-
-OFF_CRC1 = 0x10
-OFF_CRC2 = 0x14
+OFF_CRC = 0x10
 OFF_TITLE = 0x20
 LEN_TITLE = 20
 OFF_MEDIA = 0x3B
 OFF_CART = 0x3C
 OFF_REGION = 0x3E
 OFF_VERSION = 0x3F
+PRINTABLE = range(32, 127)
+UNPRINTABLE = "?"
 
 ORDER_NAMES = {
     ByteOrder.Z64: "big endian",
@@ -59,7 +46,7 @@ REGIONS = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RomHeader:
     byte_order: str
     true_extension: str
@@ -77,42 +64,27 @@ class RomHeader:
         return f"{self.media}{self.cart_id}{self.region_code}"
 
 
-def _normalise(head: bytes) -> tuple[bytes, str, str] | None:
-    order = detect(head)
-    if order is None:
-        return None
-    return swap(head, order), ORDER_NAMES[order], order.value
-
-
-def identity_key(data: bytes) -> bytes | None:
-    """The 64 bytes a patch binds to, normalised to big endian."""
-    if len(data) < HEADER_SIZE:
-        return None
-    result = _normalise(data[:HEADER_SIZE])
-    return None if result is None else result[0]
+def _character(value: int) -> str:
+    return chr(value) if value in PRINTABLE else UNPRINTABLE
 
 
 def parse(data: bytes) -> RomHeader | None:
-    if len(data) < HEADER_SIZE:
+    order = detect(data[:HEADER_SIZE]) if len(data) >= HEADER_SIZE else None
+    if order is None:
         return None
-    result = _normalise(data[:HEADER_SIZE])
-    if result is None:
-        return None
-    head, order, ext = result
-
-    media = chr(head[OFF_MEDIA]) if 32 <= head[OFF_MEDIA] < 127 else "?"
-    region_code = chr(head[OFF_REGION]) if 32 <= head[OFF_REGION] < 127 else "?"
+    head = swap(data[:HEADER_SIZE], order)
+    region_code = _character(head[OFF_REGION])
+    crc1, crc2 = struct.unpack_from(">2I", head, OFF_CRC)
     title = head[OFF_TITLE : OFF_TITLE + LEN_TITLE].decode("ascii", "replace")
-
     return RomHeader(
-        byte_order=order,
-        true_extension=ext,
+        byte_order=ORDER_NAMES[order],
+        true_extension=order.value,
         internal_name=title.rstrip(" \x00").strip(),
-        media=media,
+        media=_character(head[OFF_MEDIA]),
         cart_id=head[OFF_CART : OFF_CART + 2].decode("ascii", "replace"),
         region_code=region_code,
         region=REGIONS.get(region_code, "unknown"),
         version=head[OFF_VERSION],
-        crc1=f"{struct.unpack_from('>I', head, OFF_CRC1)[0]:08X}",
-        crc2=f"{struct.unpack_from('>I', head, OFF_CRC2)[0]:08X}",
+        crc1=f"{crc1:08X}",
+        crc2=f"{crc2:08X}",
     )

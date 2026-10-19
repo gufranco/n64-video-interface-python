@@ -44,3 +44,8 @@ def swap(data: bytes, order: ByteOrder) -> bytes:
             swapped[lane::HEAD_BYTES] = body[HEAD_BYTES - 1 - lane :: HEAD_BYTES]
         return bytes(swapped) + tail
     return data
+
+
+def to_big_endian(data: bytes) -> tuple[bytes, ByteOrder]:
+    order = detect(data) or ByteOrder.Z64
+    return swap(data, order), order

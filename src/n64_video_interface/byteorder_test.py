@@ -1,6 +1,6 @@
 import pytest
 
-from n64_video_interface.byteorder import ByteOrder, detect, swap
+from n64_video_interface.byteorder import ByteOrder, detect, swap, to_big_endian
 
 Z64_WORDS = bytes.fromhex("80371240 0000000f 80246000 00001449")
 V64_WORDS = bytes.fromhex("37804012 00000f00 24800060 00004914")
@@ -95,3 +95,29 @@ class TestSwap:
 
         # Assert
         assert same == stored
+
+
+class TestToBigEndian:
+    @pytest.mark.parametrize(
+        ("stored", "order"),
+        [(Z64_WORDS, ByteOrder.Z64), (V64_WORDS, ByteOrder.V64), (N64_WORDS, ByteOrder.N64)],
+    )
+    def test_any_order_comes_back_big_endian_with_its_order(self, stored, order):
+        # Arrange
+        data = stored
+
+        # Act
+        converted = to_big_endian(data)
+
+        # Assert
+        assert converted == (Z64_WORDS, order)
+
+    def test_data_without_a_header_is_treated_as_big_endian(self):
+        # Arrange
+        data = bytes(8)
+
+        # Act
+        converted = to_big_endian(data)
+
+        # Assert
+        assert converted == (data, ByteOrder.Z64)

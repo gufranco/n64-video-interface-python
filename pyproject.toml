@@ -47,7 +47,6 @@ pattern = "VERSION = \"(?P<version>[^\"]+)\""
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/n64_video_interface"]
-# The tests sit beside the code, so they would ship without this.
 exclude = ["*_test.py", "conftest.py"]
 
 [tool.hatch.build.targets.sdist]
@@ -55,15 +54,9 @@ include = ["src/n64_video_interface", "README.md", "LICENSE.txt", "pyproject.tom
 exclude = ["**/*.z64", "**/*.v64", "**/*.n64", "**/*.ips", "**/*.aps"]
 
 [tool.pytest.ini_options]
-# Tests live beside the code they test, as `<module>_test.py`. pytest already
-# collects that name, and it is the one shape that does not collide: a file
-# called `<module>.test.py` is imported as `<package>.<module>.test`, which
-# turns `<package>.<module>` into a namespace package and shadows the module
-# under test with an empty one.
 testpaths = ["src"]
 addopts = "-q --strict-markers --strict-config"
 markers = ["artifacts: needs the dumps listed in artifacts.manifest.json, found through N64VI_ROM_DIRS"]
-# So `pytest` works from a clean checkout with no environment set up.
 pythonpath = ["src"]
 
 [tool.coverage.run]
@@ -75,13 +68,7 @@ omit = ["*_test.py", "*/conftest.py"]
 show_missing = true
 skip_covered = true
 exclude_also = [
-  # The guard hands argv to a function that is itself tested, so there is
-  # nothing behind it left to exercise. Importing the module to reach the guard
-  # would run the tool rather than test it.
   'if __name__ == "__main__":',
-  # A type checking block never runs, by definition. Python 3.14 drops it before
-  # coverage can see it and earlier versions do not, so leaving it in would make
-  # the gate mean one thing on the newest runtime and another on the oldest.
   'if TYPE_CHECKING:',
   "raise NotImplementedError",
 ]
@@ -97,11 +84,6 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "PTH", "R
 ignore = ["RUF001"]
 
 [tool.mypy]
-# Strict, plus the optional error classes the version offers. This code decides
-# which bytes of a ROM are rewritten and what the checksum is resealed to, so a
-# None or a width crossing a boundary it should not is exactly the class of
-# defect worth catching before the bytes are written. The settings live here so
-# a local run and CI agree.
 strict = true
 python_version = "3.11"
 warn_unreachable = true
@@ -118,10 +100,6 @@ enable_error_code = [
   "unused-awaitable",
 ]
 files = ["src/n64_video_interface"]
-# The tests sit beside the code and build deliberately malformed inputs to
-# prove it refuses them, so they hand wrong types in on purpose. Checking them
-# strictly would mean annotating a lie. mypy rejects a wildcard inside a module
-# component, so the exclusion is by path rather than by module name.
 exclude = "(_test|conftest)\\.py$"
 
 [tool.ruff.lint.per-file-ignores]

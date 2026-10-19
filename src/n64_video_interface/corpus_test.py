@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from n64_video_interface import checksum, vi
+from n64_video_interface import checksum
 from n64_video_interface.byteorder import ByteOrder, detect, swap
+from n64_video_interface.features import find_special_features
+from n64_video_interface.patch import NO_TABLE, safe_patch
 
 ROM_DIRS = "N64VI_ROM_DIRS"
 MANIFEST = Path(__file__).resolve().parents[2] / "artifacts.manifest.json"
@@ -74,7 +76,7 @@ def test_the_header_checksum_verdict_matches_the_manifest(entry):
     assert ("valid" if valid else "invalid") == entry["header_checksum"]
 
 
-KNOWN_REFUSALS = frozenset({vi.NO_TABLE})
+KNOWN_REFUSALS = frozenset({NO_TABLE})
 
 
 def outcome(data, result):
@@ -95,7 +97,7 @@ def test_a_patch_reseals_under_its_own_chip_and_changes_nothing_else(entry):
     data = LOCATED[entry["sha256"]].read_bytes()
 
     # Act
-    result = vi.safe_patch(data, **SETTINGS)
+    result = safe_patch(data, **SETTINGS)
 
     # Assert
     assert outcome(data, result)[1] is True
@@ -118,7 +120,7 @@ def test_every_mode_word_the_other_tool_edits_is_edited_here_too(entry):
     data = big_endian(rom.read_bytes())
     routines = [
         range(site.offset - ROUTINE_BEFORE, site.masks["antialias"] + ROUTINE_AFTER)
-        for site in vi.find_special_features(data)
+        for site in find_special_features(data)
     ]
     theirs = {
         offset & ~3
@@ -127,7 +129,7 @@ def test_every_mode_word_the_other_tool_edits_is_edited_here_too(entry):
     }
 
     # Act
-    result = vi.safe_patch(rom.read_bytes(), antialiasing=False, divot=False)
+    result = safe_patch(rom.read_bytes(), antialiasing=False, divot=False)
 
     # Assert
     assert theirs - ORACLE_FALSE_POSITIVES.get(entry["sha256"], frozenset()) <= {

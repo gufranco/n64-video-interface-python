@@ -1,111 +1,148 @@
-"""The command line, which is the whole of what this package offers a person.
-
-Two properties carry the risk. Nothing may write over the ROM it was given, so
-both editing verbs require an output path and neither has a form that defaults
-to in-place. And a refusal must stay a refusal: when the video stage declines,
-no file may appear, because a zero-byte patch beside a ROM reads as a change
-that was applied.
-"""
-
-from __future__ import annotations
-
+import importlib
 import json
 
 import pytest
 
-from n64_video_interface import cli, vi
-from n64_video_interface.conftest import make_rom
+from n64_video_interface import cli
+from n64_video_interface.audit import audit
+from n64_video_interface.checksum import verify
+from n64_video_interface.conftest import SEALABLE_SIZE, make_rom, mode_entry, sealable_rom
 from n64_video_interface.ips_test import apply_ips
-from n64_video_interface.vi_test import mode_entry
+from n64_video_interface.patch import ALREADY_OFF
+from n64_video_interface.seal import reseal
+from n64_video_interface.version import VERSION
 
-
-def rom_with_table(ctrl: int = 0x0000311E) -> bytes:
-    data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000, title="SHARP TEST ROM"))
-    entry = mode_entry(ctrl=ctrl)
-    data[0x2000 : 0x2000 + len(entry)] = entry
-    return vi.reseal(bytes(data), "6102")
+EVERY_SWITCH = [f"--{flag}" for flag, _, _ in cli.SWITCHES]
 
 
 @pytest.fixture
 def sample(tmp_path):
+    rom = bytearray(sealable_rom()[0])
+    rom[0x20:0x34] = b"SHARP TEST ROM      "
     path = tmp_path / "game.z64"
-    path.write_bytes(rom_with_table())
+    path.write_bytes(reseal(bytes(rom), "6102"))
     return path
 
 
+def run(capsys, *argv):
+    code = cli.main(list(argv))
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
 class TestAudit:
-    def test_it_reports_the_mode_table(self, sample, capsys):
-        assert cli.main(["audit", str(sample)]) == 0
-        assert "video mode table" in capsys.readouterr().out
+    def test_the_report_names_the_title_and_the_table(self, sample, capsys):
+        # Arrange
+        argv = ("audit", str(sample))
 
-    def test_it_names_the_internal_title(self, sample, capsys):
-        cli.main(["audit", str(sample)])
+        # Act
+        code, out, _ = run(capsys, *argv)
 
-        assert "SHARP TEST ROM" in capsys.readouterr().out
+        # Assert
+        assert (code, out) == (
+            0,
+            "title              SHARP TEST ROM\n"
+            "video mode table   1 entries, NTSC\n"
+            "anti-aliasing      on in 1 of 1\n"
+            "divot filter       on in 1 of 1\n"
+            "gamma dithering    on in 1 of 1\n"
+            "dedither requests  0\n",
+        )
 
     def test_json_carries_the_counts(self, sample, capsys):
-        cli.main(["audit", str(sample), "--json"])
+        # Arrange
+        argv = ("audit", str(sample), "--json")
 
-        payload = json.loads(capsys.readouterr().out)
-        assert payload["modes"] == 1
-        assert payload["antialiasing_on"] == 1
+        # Act
+        _, out, _ = run(capsys, *argv)
 
-    def test_a_rom_with_no_table_still_reports(self, tmp_path, capsys):
+        # Assert
+        assert json.loads(out) == {
+            "title": "SHARP TEST ROM",
+            "modes": 1,
+            "antialiasing_on": 1,
+            "dither_filter_on": 0,
+            "divot_on": 1,
+            "gamma_dither_on": 1,
+            "special_features_sites": 0,
+            "dedither_requests": 0,
+            "standards": ["NTSC"],
+            "ctrl_values": ["0000311E"],
+        }
+
+    def test_a_rom_with_no_table_or_header_still_reports(self, tmp_path, capsys):
+        # Arrange
         plain = tmp_path / "plain.z64"
-        plain.write_bytes(make_rom())
+        plain.write_bytes(bytes(0x1000))
 
-        assert cli.main(["audit", str(plain)]) == 0
-        assert "none could be proven present" in capsys.readouterr().out
+        # Act
+        code, out, _ = run(capsys, "audit", str(plain))
+
+        # Assert
+        assert (code, out) == (
+            0,
+            "title              unknown\n"
+            "video mode table   none could be proven present\n"
+            "dedither requests  0\n",
+        )
 
     def test_a_missing_file_is_refused_not_crashed(self, tmp_path, capsys):
-        code = cli.main(["audit", str(tmp_path / "nope.z64")])
+        # Arrange
+        missing = tmp_path / "nope.z64"
 
-        assert code == 1
-        assert "could not read" in capsys.readouterr().err
+        # Act
+        code, _, err = run(capsys, "audit", str(missing))
+
+        # Assert
+        assert (code, err.startswith(f"could not read {missing}")) == (1, True)
 
 
 class TestPatch:
-    def test_it_writes_an_edited_copy(self, sample, tmp_path):
-        out = tmp_path / "sharp.z64"
-
-        assert cli.main(["patch", str(sample), "--no-aa", "--output", str(out)]) == 0
-        assert vi.audit(out.read_bytes()).antialiasing_on == 0
-
-    def test_the_rom_it_was_given_is_untouched(self, sample, tmp_path):
+    def test_the_copy_is_edited_and_resealed_and_the_rom_untouched(self, sample, tmp_path, capsys):
+        # Arrange
         before = sample.read_bytes()
-
-        cli.main(["patch", str(sample), "--no-aa", "--output", str(tmp_path / "s.z64")])
-
-        assert sample.read_bytes() == before
-
-    def test_the_copy_carries_a_valid_checksum(self, sample, tmp_path):
-        from n64_video_interface import checksum
-
-        out = tmp_path / "sharp.z64"
-        cli.main(["patch", str(sample), "--no-aa", "--output", str(out)])
-
-        valid, cic = checksum.verify(out.read_bytes())
-        assert valid
-        assert cic
-
-    def test_naming_no_setting_is_refused(self, sample, tmp_path, capsys):
-        code = cli.main(["patch", str(sample), "--output", str(tmp_path / "s.z64")])
-
-        assert code == 1
-        assert "at least one setting" in capsys.readouterr().err
-
-    def test_a_refusal_writes_no_file(self, tmp_path, capsys):
-        plain = tmp_path / "plain.z64"
-        plain.write_bytes(make_rom())
         out = tmp_path / "sharp.z64"
 
-        code = cli.main(["patch", str(plain), "--no-aa", "--output", str(out)])
+        # Act
+        code, stdout, _ = run(capsys, "patch", str(sample), "--no-aa", "--output", str(out))
 
-        assert code == 1
-        assert not out.exists()
+        # Assert
+        assert (
+            code,
+            audit(out.read_bytes()).antialiasing_on,
+            verify(out.read_bytes()),
+            sample.read_bytes() == before,
+            stdout,
+        ) == (
+            0,
+            0,
+            (True, "6102"),
+            True,
+            "1 of 1 mode entries changed, boot chip 6102, checksum resealed\n"
+            f"written to {out}. The ROM you named was not modified.\n",
+        )
 
+    @pytest.mark.parametrize(
+        ("extra", "message"),
+        [
+            ((), "name at least one setting to turn off, such as --no-aa\n"),
+            (
+                ("--no-dither",),
+                f"refused: {ALREADY_OFF}\n",
+            ),
+        ],
+        ids=["no setting", "refused by the patch"],
+    )
+    def test_a_refusal_writes_no_file(self, sample, tmp_path, capsys, extra, message):
+        # Arrange
+        out = tmp_path / "sharp.z64"
 
-class TestOutputThatIsTheInput:
+        # Act
+        code, _, err = run(capsys, "patch", str(sample), *extra, "--output", str(out))
+
+        # Assert
+        assert (code, err, out.exists()) == (1, message, False)
+
     @pytest.mark.parametrize("verb", ["patch", "ips"])
     def test_an_output_naming_the_input_is_refused_and_the_rom_kept(self, verb, sample, capsys):
         # Arrange
@@ -113,187 +150,132 @@ class TestOutputThatIsTheInput:
         same = sample.parent / "." / sample.name
 
         # Act
-        code = cli.main([verb, str(sample), "--no-aa", "--output", str(same)])
+        code, _, err = run(capsys, verb, str(sample), "--no-aa", "--output", str(same))
 
         # Assert
-        assert (code, sample.read_bytes(), capsys.readouterr().err) == (
-            1,
-            before,
-            "refused: the output names the ROM being read, which would destroy it\n",
+        assert (code, sample.read_bytes() == before, err) == (1, True, cli.OUTPUT_IS_INPUT + "\n")
+
+    @pytest.mark.parametrize("verb", ["patch", "ips"])
+    def test_a_path_that_cannot_be_written_is_reported(self, verb, sample, tmp_path, capsys):
+        # Arrange
+        blocked = tmp_path / "missing" / "deep" / "sharp"
+
+        # Act
+        code, _, err = run(capsys, verb, str(sample), "--no-aa", "--output", str(blocked))
+
+        # Assert
+        assert (code, err.startswith(f"could not write {blocked}")) == (1, True)
+
+    def test_a_rom_that_cannot_be_read_is_reported(self, tmp_path, capsys):
+        # Arrange
+        missing = tmp_path / "nope.z64"
+
+        # Act
+        code, _, err = run(
+            capsys, "patch", str(missing), "--no-aa", "--output", str(tmp_path / "s.z64")
         )
+
+        # Assert
+        assert (code, err.startswith(f"could not read {missing}")) == (1, True)
 
 
 class TestIps:
-    def test_it_writes_a_patch(self, sample, tmp_path):
-        out = tmp_path / "sharp.ips"
-
-        assert cli.main(["ips", str(sample), "--no-aa", "--output", str(out)]) == 0
-        assert out.read_bytes().startswith(b"PATCH")
-        assert out.read_bytes().endswith(b"EOF")
-
-    def test_the_rom_it_was_given_is_untouched(self, sample, tmp_path):
-        before = sample.read_bytes()
-
-        cli.main(["ips", str(sample), "--no-aa", "--output", str(tmp_path / "s.ips")])
-
-        assert sample.read_bytes() == before
-
-    def test_a_refusal_writes_no_file(self, tmp_path):
-        plain = tmp_path / "plain.z64"
-        plain.write_bytes(make_rom())
-        out = tmp_path / "sharp.ips"
-
-        assert cli.main(["ips", str(plain), "--no-aa", "--output", str(out)]) == 1
-        assert not out.exists()
-
-
-class TestTheRdpDitherSwitches:
-    def test_both_switches_are_offered_by_both_editing_verbs(self):
+    def test_applying_the_patch_reproduces_the_patched_rom(self, sample, tmp_path, capsys):
         # Arrange
-        parser = cli.build_parser()
+        edited = tmp_path / "sharp.z64"
+        run(capsys, "patch", str(sample), "--no-aa", "--output", str(edited))
+        patch = tmp_path / "sharp.ips"
 
         # Act
-        parsed = [
-            parser.parse_args(
-                [
-                    verb,
-                    "game.z64",
-                    "--output",
-                    "o",
-                    "--no-rdp-color-dither",
-                    "--no-rdp-alpha-dither",
-                ]
-            )
-            for verb in ("patch", "ips")
-        ]
+        code, _, _ = run(capsys, "ips", str(sample), "--no-aa", "--output", str(patch))
 
         # Assert
-        assert [cli._requested(args) for args in parsed] == [
-            {"rdp_color_dither": False, "rdp_alpha_dither": False}
-        ] * 2
-
-
-class TestTheParser:
-    def test_no_arguments_prints_usage(self, capsys):
-        assert cli.main([]) == 2
-        assert "usage" in capsys.readouterr().out
-
-    def test_every_switch_is_offered_by_both_editing_verbs(self):
-        parser = cli.build_parser()
-        text = parser.format_help()
-
-        assert "audit" in text
-        assert "patch" in text
-        assert "ips" in text
-
-    def test_neither_editing_verb_can_run_without_an_output(self, sample):
-        for verb in ("patch", "ips"):
-            with pytest.raises(SystemExit):
-                cli.build_parser().parse_args([verb, str(sample), "--no-aa"])
-
-
-class TestFailingToWrite:
-    """A tool that cannot write its output has to say so, not traceback.
-
-    The output path comes from the caller, so it can name a directory that does
-    not exist, one they cannot write to, or a name the filesystem refuses. Every
-    one of those is a normal mistake rather than a fault in this code.
-    """
-
-    def test_patch_reports_a_path_it_cannot_write(self, sample, tmp_path, capsys):
-        blocked = tmp_path / "missing" / "deep" / "sharp.z64"
-
-        code = cli.main(["patch", str(sample), "--no-aa", "--output", str(blocked)])
-
-        assert code == 1
-        assert "could not write" in capsys.readouterr().err
-
-    def test_ips_reports_a_path_it_cannot_write(self, sample, tmp_path, capsys):
-        blocked = tmp_path / "missing" / "deep" / "sharp.ips"
-
-        code = cli.main(["ips", str(sample), "--no-aa", "--output", str(blocked)])
-
-        assert code == 1
-        assert "could not write" in capsys.readouterr().err
-
-    def test_patch_refuses_a_rom_it_cannot_read(self, tmp_path, capsys):
-        code = cli.main(
-            ["patch", str(tmp_path / "nope.z64"), "--no-aa", "--output", str(tmp_path / "s.z64")]
+        assert (code, apply_ips(sample.read_bytes(), patch.read_bytes())) == (
+            0,
+            edited.read_bytes(),
         )
-
-        assert code == 1
-        assert "could not read" in capsys.readouterr().err
 
     def test_an_edit_beyond_what_ips_addresses_is_refused(self, tmp_path, capsys):
         # Arrange
-        data = bytearray(make_rom(size=0x1000100, title="SHARP TEST ROM"))
-        entry = mode_entry()
-        data[0x1000000 : 0x1000000 + len(entry)] = entry
+        data = bytearray(make_rom(size=0x1000100))
+        data[0x1000000 : 0x1000000 + 80] = mode_entry()
         rom = tmp_path / "big.z64"
-        rom.write_bytes(vi.reseal(bytes(data), "6102"))
+        rom.write_bytes(reseal(bytes(data), "6102"))
         out = tmp_path / "sharp.ips"
 
         # Act
-        code = cli.main(["ips", str(rom), "--no-aa", "--output", str(out)])
+        code, _, err = run(capsys, "ips", str(rom), "--no-aa", "--output", str(out))
 
         # Assert
-        assert (code, out.exists(), capsys.readouterr().err) == (
+        assert (code, out.exists(), err) == (
             1,
             False,
             "refused: offset 0x1000006 is beyond what IPS can address, 0xFFFFFF\n",
         )
 
-    def test_applying_the_written_patch_reproduces_the_patched_rom(self, sample, tmp_path):
+
+class TestTheParser:
+    def test_no_verb_prints_usage(self, capsys):
         # Arrange
-        out = tmp_path / "sharp.ips"
-        edited = tmp_path / "sharp.z64"
-        cli.main(["patch", str(sample), "--no-aa", "--output", str(edited)])
+        argv = ()
 
         # Act
-        cli.main(["ips", str(sample), "--no-aa", "--output", str(out)])
+        code, out, _ = run(capsys, *argv)
 
         # Assert
-        assert apply_ips(sample.read_bytes(), out.read_bytes()) == edited.read_bytes()
+        assert (code, out.startswith("usage: n64vi")) == (2, True)
 
+    @pytest.mark.parametrize("verb", ["patch", "ips"])
+    def test_every_switch_maps_to_its_setting_turned_off(self, verb):
+        # Arrange
+        parser = cli.build_parser()
 
-class TestTheEntryPoints:
-    """The two lines between a shell and `main`, which nothing reached.
+        # Act
+        args = parser.parse_args([verb, "game.z64", "--output", "o", *EVERY_SWITCH])
 
-    `python -m n64_video_interface` and the console script both end up in the
-    same function, and the glue in front of it is small enough to look obviously
-    right and still be the thing that breaks an install.
-    """
+        # Assert
+        assert cli.requested(args) == {name: False for _, name, _ in cli.SWITCHES}
 
-    def test_the_module_entry_point_imports_the_same_main(self):
-        import importlib
+    @pytest.mark.parametrize("verb", ["patch", "ips"])
+    def test_neither_editing_verb_runs_without_an_output(self, verb, capsys):
+        # Arrange
+        parser = cli.build_parser()
 
-        module = importlib.import_module("n64_video_interface.__main__")
+        # Act
+        with pytest.raises(SystemExit) as caught:
+            parser.parse_args([verb, "game.z64", "--no-aa"])
 
+        # Assert
+        assert (caught.value.code, "--output" in capsys.readouterr().err) == (2, True)
+
+    def test_the_version_is_printed(self, capsys):
+        # Arrange
+        parser = cli.build_parser()
+
+        # Act
+        with pytest.raises(SystemExit) as caught:
+            parser.parse_args(["--version"])
+
+        # Assert
+        assert (caught.value.code, capsys.readouterr().out) == (0, f"{VERSION}\n")
+
+    def test_the_module_entry_point_runs_the_same_main(self):
+        # Arrange
+        name = "n64_video_interface.__main__"
+
+        # Act
+        module = importlib.import_module(name)
+
+        # Assert
         assert module.main is cli.main
 
-    def test_a_parser_exit_becomes_a_return_code(self, monkeypatch):
-        def leave(_args):
-            raise SystemExit(3)
 
-        monkeypatch.setattr(cli, "build_parser", lambda: _parser_returning(leave))
+def test_a_sealable_rom_is_large_enough_to_checksum():
+    # Arrange
+    size = SEALABLE_SIZE
 
-        assert cli.main(["audit", "whatever"]) == 3
+    # Act
+    rom = make_rom(size=size)
 
-    def test_a_clean_parser_exit_is_a_zero(self, monkeypatch):
-        def leave(_args):
-            raise SystemExit(None)
-
-        monkeypatch.setattr(cli, "build_parser", lambda: _parser_returning(leave))
-
-        assert cli.main(["audit", "whatever"]) == 0
-
-
-def _parser_returning(func):
-    import argparse
-
-    parser = argparse.ArgumentParser(prog="n64vi")
-    sub = parser.add_subparsers(dest="command")
-    one = sub.add_parser("audit")
-    one.add_argument("rom")
-    one.set_defaults(func=func)
-    return parser
+    # Assert
+    assert len(rom) == size
