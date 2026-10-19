@@ -3,7 +3,6 @@ from __future__ import annotations
 from enum import StrEnum
 
 CONFIG_MARK = 0x80
-CONFIG_LOW = 0x40
 HEAD_BYTES = 4
 
 
@@ -13,18 +12,18 @@ class ByteOrder(StrEnum):
     N64 = "n64"
 
 
-_MARK_POSITIONS = {
-    (0, 3): ByteOrder.Z64,
-    (1, 2): ByteOrder.V64,
-    (3, 0): ByteOrder.N64,
-}
+_MARK_POSITIONS = (
+    (0, ByteOrder.Z64),
+    (1, ByteOrder.V64),
+    (3, ByteOrder.N64),
+)
 
 
 def detect(data: bytes) -> ByteOrder | None:
     if len(data) < HEAD_BYTES:
         return None
-    for (mark, low), order in _MARK_POSITIONS.items():
-        if data[mark] == CONFIG_MARK and data[low] == CONFIG_LOW:
+    for mark, order in _MARK_POSITIONS:
+        if data[mark] == CONFIG_MARK:
             return order
     return None
 

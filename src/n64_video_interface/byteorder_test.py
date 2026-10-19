@@ -17,6 +17,9 @@ class TestDetect:
             (bytes.fromhex("80270740"), ByteOrder.Z64),
             (bytes.fromhex("27804007"), ByteOrder.V64),
             (bytes.fromhex("40072780"), ByteOrder.N64),
+            (bytes.fromhex("37804112"), ByteOrder.V64),
+            (bytes.fromhex("41123780"), ByteOrder.N64),
+            (bytes.fromhex("80371241"), ByteOrder.Z64),
         ],
     )
     def test_the_order_comes_from_where_the_config_bytes_land(self, data, expected):
