@@ -5,6 +5,8 @@ import pytest
 from n64_video_interface import vi
 
 NTSC_LAN1_CTRL = 0x0000311E
+LUI_AT_ONE = 0x3C010001
+LUI_V1_ONE = 0x3C030001
 
 
 def mode_entry(ctrl=NTSC_LAN1_CTRL, width=320, vsync=525, hsync=3093):
@@ -543,7 +545,7 @@ class TestEmitIps:
         assert b"\x00\x00\x10" in patch
 
 
-def dither_block(base, *, flag=0x0040, branch_op=0x04, guard_gap=1, skip=6):
+def dither_block(base, *, flag=0x0040, branch_op=0x04, guard_gap=1, skip=6, setter_word=LUI_AT_ONE):
     """A minimal OS_VI_DITHER_FILTER_ON block laid out like a compiled one.
 
     andi at base, the guard; a branch on that register clearing the setter; then
@@ -555,7 +557,7 @@ def dither_block(base, *, flag=0x0040, branch_op=0x04, guard_gap=1, skip=6):
     setter = branch + 8
     words[guard] = 0x30000000 | (4 << 21) | (14 << 16) | flag
     words[branch] = (branch_op << 26) | (14 << 21) | (0 << 16) | skip
-    words[setter] = vi.LUI_AT_ONE
+    words[setter] = setter_word
     return words, guard, branch, setter
 
 
@@ -594,6 +596,16 @@ class TestFindDitherRequests:
 
         assert vi.find_dither_requests(blob) == ()
 
+    def test_finds_a_request_whose_setter_loads_a_register_other_than_at(self):
+        # Arrange
+        blob, guard, _, setter = rom_with_dither_request(setter_word=LUI_V1_ONE)
+
+        # Act
+        found = vi.find_dither_requests(blob)
+
+        # Assert
+        assert [(request.guard, request.setter) for request in found] == [(guard, setter)]
+
     def test_accepts_a_branch_likely_as_the_guard(self):
         blob, _, _, _ = rom_with_dither_request(branch_op=0x14)
 
@@ -613,7 +625,7 @@ class TestFindDitherRequests:
 
     def test_finds_nothing_without_the_library_signature(self):
         blob = bytearray(0x400)
-        struct.pack_into(">I", blob, 0x80, vi.LUI_AT_ONE)
+        struct.pack_into(">I", blob, 0x80, LUI_AT_ONE)
 
         assert vi.find_dither_requests(bytes(blob)) == ()
 
@@ -644,7 +656,7 @@ class TestClearDitherRequests:
 
         out, _ = vi.clear_dither_requests(blob)
 
-        assert struct.unpack_from(">I", out, setter)[0] == vi.LUI_AT_ONE
+        assert struct.unpack_from(">I", out, setter)[0] == LUI_AT_ONE
 
     def test_the_request_is_gone_afterwards(self):
         blob, _, _, _ = rom_with_dither_request()

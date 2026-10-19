@@ -265,7 +265,8 @@ def find_special_features(rom: bytes) -> tuple[SpecialFeaturesSite, ...]:
 OP_BEQ = 0x04
 OP_BEQL = 0x14
 OP_ANDI = 0x0C
-LUI_AT_ONE = 0x3C010001
+OP_LUI = 0x0F
+LUI_DITHER_FILTER_UPPER = 0x0001
 DITHER_FILTER_ON_FLAG = 0x0040
 DITHER_SEARCH_BACK = 0x100
 DITHER_SEARCH_FORWARD = 0x80
@@ -275,7 +276,7 @@ DITHER_SEARCH_FORWARD = 0x80
 class DitherRequest:
     """Where a ROM asks the library to switch the dedither filter on.
 
-    `setter` is the `lui at, 0x0001` that puts bit 16 in place for the `or` that
+    `setter` is the `lui rX, 0x0001` that puts bit 16 in place for the `or` that
     follows. `guard` is the `andi` computing the OS_VI_DITHER_FILTER_ON flag, and
     `branch` is the `beq`/`beql` that skips the whole block when the flag is
     clear. Zeroing the guard's immediate makes the branch always taken, so the
@@ -287,6 +288,12 @@ class DitherRequest:
     guard: int
     target: int
     flag: int
+
+
+def _sets_dither_filter_bit(word: int) -> bool:
+    return (
+        word >> 26 == OP_LUI and (word >> 21) & 31 == 0 and word & 0xFFFF == LUI_DITHER_FILTER_UPPER
+    )
 
 
 def _guard_for(rom: bytes, setter: int, floor: int) -> tuple[int, int, int, int] | None:
@@ -332,7 +339,7 @@ def find_dither_requests(rom: bytes) -> tuple[DitherRequest, ...]:
         floor = max(0, site.offset - DITHER_SEARCH_BACK)
         ceiling = min(len(rom) - 4, site.masks["antialias"] + DITHER_SEARCH_FORWARD)
         for setter in range(floor, ceiling, 4):
-            if struct.unpack_from(">I", rom, setter)[0] != LUI_AT_ONE:
+            if not _sets_dither_filter_bit(struct.unpack_from(">I", rom, setter)[0]):
                 continue
             resolved = _guard_for(rom, setter, floor)
             if resolved is None:
