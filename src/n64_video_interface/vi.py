@@ -28,7 +28,9 @@ mode table signature was verified against retail ROMs before being relied on.
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from .byteorder import ByteOrder, detect, swap
 
 CTRL_TYPE_MASK = 0x00003
 CTRL_GAMMA_DITHER = 0x00004
@@ -409,7 +411,17 @@ class Report:
         return self.dither_filter_on > 0 or self.divot_on > 0
 
 
+def _as_z64(rom: bytes) -> tuple[bytes, ByteOrder]:
+    order = detect(rom) or ByteOrder.Z64
+    return swap(rom, order), order
+
+
 def audit(rom: bytes) -> Report:
+    big, _ = _as_z64(rom)
+    return _audit_z64(big)
+
+
+def _audit_z64(rom: bytes) -> Report:
     modes = find_mode_tables(rom)
     decoded = [m.decoded for m in modes]
     seen: list[int] = []
@@ -516,7 +528,7 @@ def _describe(modes: int, entries: int, requests: int) -> str:
     return ", ".join(parts) or "nothing changed"
 
 
-def safe_patch(
+def _safe_patch_z64(
     rom: bytes,
     *,
     antialiasing: bool | None = None,
@@ -626,3 +638,24 @@ def safe_patch(
         changes=tuple(changes),
         cic=cic,
     )
+
+
+def safe_patch(
+    rom: bytes,
+    *,
+    antialiasing: bool | None = None,
+    divot: bool | None = None,
+    gamma_dither: bool | None = None,
+    gamma: bool | None = None,
+    dither_filter: bool | None = None,
+) -> PatchResult:
+    big, order = _as_z64(rom)
+    result = _safe_patch_z64(
+        big,
+        antialiasing=antialiasing,
+        divot=divot,
+        gamma_dither=gamma_dither,
+        gamma=gamma,
+        dither_filter=dither_filter,
+    )
+    return replace(result, data=swap(result.data, order)) if result.applied else result

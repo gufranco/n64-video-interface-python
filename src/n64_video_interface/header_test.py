@@ -1,4 +1,7 @@
+import pytest
+
 from n64_video_interface import header
+from n64_video_interface.byteorder import ByteOrder, swap
 
 
 class TestByteOrderDetection:
@@ -30,6 +33,19 @@ class TestByteOrderDetection:
         ]
 
         assert len(set(fields)) == 1
+
+    @pytest.mark.parametrize("order", list(ByteOrder))
+    def test_reads_a_dump_whose_config_word_is_not_the_common_one(self, rom_factory, order):
+        # Arrange
+        data = bytearray(rom_factory(title="OTHER CONFIG"))
+        data[0:4] = bytes.fromhex("80270740")
+        stored = swap(bytes(data), order)
+
+        # Act
+        info = header.parse(stored)
+
+        # Assert
+        assert (info.internal_name, info.true_extension) == ("OTHER CONFIG", order.value)
 
     def test_rejects_content_that_is_not_a_rom(self):
         assert header.parse(b"\x00" * 0x40) is None

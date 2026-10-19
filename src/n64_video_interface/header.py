@@ -16,6 +16,8 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from .byteorder import ByteOrder, detect, swap
+
 HEADER_SIZE = 0x40
 
 OFF_CRC1 = 0x10
@@ -27,14 +29,10 @@ OFF_CART = 0x3C
 OFF_REGION = 0x3E
 OFF_VERSION = 0x3F
 
-BIG_ENDIAN = b"\x80\x37\x12\x40"
-BYTESWAPPED = b"\x37\x80\x40\x12"
-LITTLE_ENDIAN = b"\x40\x12\x37\x80"
-
-_ORDERS = {
-    BIG_ENDIAN: ("big endian", "z64"),
-    BYTESWAPPED: ("byteswapped", "v64"),
-    LITTLE_ENDIAN: ("little endian", "n64"),
+ORDER_NAMES = {
+    ByteOrder.Z64: "big endian",
+    ByteOrder.V64: "byteswapped",
+    ByteOrder.N64: "little endian",
 }
 
 REGIONS = {
@@ -80,15 +78,10 @@ class RomHeader:
 
 
 def _normalise(head: bytes) -> tuple[bytes, str, str] | None:
-    magic = bytes(head[:4])
-    if magic not in _ORDERS:
+    order = detect(head)
+    if order is None:
         return None
-    order, ext = _ORDERS[magic]
-    if ext == "v64":
-        head = bytes(b for pair in zip(head[1::2], head[0::2], strict=True) for b in pair)
-    elif ext == "n64":
-        head = b"".join(head[i : i + 4][::-1] for i in range(0, len(head), 4))
-    return head, order, ext
+    return swap(head, order), ORDER_NAMES[order], order.value
 
 
 def identity_key(data: bytes) -> bytes | None:

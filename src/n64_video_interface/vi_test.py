@@ -3,6 +3,7 @@ import struct
 import pytest
 
 from n64_video_interface import vi
+from n64_video_interface.byteorder import ByteOrder, swap
 
 NTSC_LAN1_CTRL = 0x0000311E
 LUI_AT_ONE = 0x3C010001
@@ -541,6 +542,38 @@ class TestSafePatch:
         twice = vi.safe_patch(once, antialiasing=False)
 
         assert twice.applied is False
+
+
+class TestEveryByteOrder:
+    def z64_rom(self):
+        from n64_video_interface.conftest import make_rom
+
+        base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
+        base[0x2000 : 0x2000 + len(mode_entry())] = mode_entry()
+        return vi.reseal(bytes(base), "6102")
+
+    @pytest.mark.parametrize("order", [ByteOrder.V64, ByteOrder.N64])
+    def test_the_audit_reads_a_dump_in_any_order(self, order):
+        # Arrange
+        stored = swap(self.z64_rom(), order)
+
+        # Act
+        report = vi.audit(stored)
+
+        # Assert
+        assert (report.mode_count, report.antialiasing_on) == (1, 1)
+
+    @pytest.mark.parametrize("order", [ByteOrder.V64, ByteOrder.N64])
+    def test_the_edited_copy_keeps_the_order_of_the_dump(self, order):
+        # Arrange
+        z64 = self.z64_rom()
+        expected = swap(vi.safe_patch(z64, antialiasing=False).data, order)
+
+        # Act
+        result = vi.safe_patch(swap(z64, order), antialiasing=False)
+
+        # Assert
+        assert (result.applied, result.data == expected) == (True, True)
 
 
 class TestReseal:
