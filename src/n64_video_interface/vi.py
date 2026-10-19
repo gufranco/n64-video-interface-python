@@ -56,6 +56,7 @@ AA_NAMES = {
 }
 
 PIXEL_TYPES = {0: "blank", 1: "reserved", 2: "16-bit", 3: "32-bit"}
+PIXEL_32_BIT = 3
 
 VSYNC_BY_STANDARD = {524: "NTSC", 525: "NTSC", 624: "PAL", 625: "PAL"}
 PLAUSIBLE_WIDTHS = (256, 320, 384, 512, 576, 640, 1280)
@@ -160,7 +161,8 @@ def apply_changes(
         elif flag is False:
             out &= ~bit
     if antialiasing is False:
-        out = (out & ~CTRL_AA_MASK) | (AA_RESAMPLE << AA_SHIFT)
+        point_sampled = AA_REPLICATE if out & CTRL_TYPE_MASK == PIXEL_32_BIT else AA_RESAMPLE
+        out = (out & ~CTRL_AA_MASK) | (point_sampled << AA_SHIFT)
     elif antialiasing is True:
         out = (out & ~CTRL_AA_MASK) | (AA_NEEDED << AA_SHIFT)
     return out & 0xFFFFFFFF

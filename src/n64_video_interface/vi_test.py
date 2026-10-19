@@ -96,6 +96,20 @@ class TestClearBits:
         assert vi.decode_ctrl(out).aa_mode == 2
         assert vi.decode_ctrl(out).antialiasing is False
 
+    @pytest.mark.parametrize(
+        ("ctrl", "expected"),
+        [(0x0000311E, 0x0000321E), (0x0000301F, 0x0000331F), (0x0000305F, 0x0000335F)],
+    )
+    def test_anti_aliasing_off_matches_the_library_point_sampled_modes(self, ctrl, expected):
+        # Arrange
+        value = ctrl
+
+        # Act
+        out = vi.apply_changes(value, antialiasing=False)
+
+        # Assert
+        assert out == expected
+
     def test_leaves_the_pixel_type_untouched(self):
         out = vi.apply_changes(0x0000311F, antialiasing=False, divot=False)
 
