@@ -293,7 +293,7 @@ class TestTheOlderMicrocodeFamily:
         sites = rdp.find_inline_sites(rom)
 
         # Assert
-        assert sites == (GBI1_AT + 12,)
+        assert [(site.at, site.family) for site in sites] == [(GBI1_AT + 12, "F3DEX")]
 
     def test_the_routine_is_rewritten_to_force_the_dither_off_in_the_same_space(self):
         # Arrange
@@ -344,3 +344,73 @@ class TestTheOlderMicrocodeFamily:
 
         # Assert
         assert sites == ()
+
+
+FAST3D_ROUTINE = (
+    0x090004B4,
+    0x23A70008,
+    0x23A7000C,
+    0x8CE30000,
+    0x2008FFFF,
+    0x9365FFFB,
+    0x9366FFFA,
+    0x20020001,
+    0x00A21004,
+    0x2042FFFF,
+    0x00C21004,
+    0x00481026,
+    0x00431024,
+    0x00581825,
+    0xACE30000,
+    0x8FB90008,
+    0x090004EA,
+    0x8FB8000C,
+)
+
+
+def fast3d_rom():
+    blob = bytearray(0x400)
+    for index, value in enumerate(FAST3D_ROUTINE):
+        struct.pack_into(">I", blob, GBI1_AT + index * 4, value)
+    return bytes(blob)
+
+
+class TestTheFast3dFamily:
+    def test_the_routine_is_found_as_fast3d(self):
+        # Arrange
+        rom = fast3d_rom()
+
+        # Act
+        sites = rdp.find_inline_sites(rom)
+
+        # Assert
+        assert [(site.at, site.family) for site in sites] == [(GBI1_AT + 12, "Fast3D")]
+
+    def test_the_routine_is_rewritten_with_nor_and_the_dither_forced_off(self):
+        # Arrange
+        rom = fast3d_rom()
+
+        # Act
+        out, _ = rdp.disable_dither(rom, bits=0xC0)
+
+        # Assert
+        assert [word(out, GBI1_AT + index * 4) for index in range(len(FAST3D_ROUTINE))] == [
+            0x090004B4,
+            0x23A70008,
+            0x23A7000C,
+            0x8CE30000,
+            0x00193202,
+            0x20020001,
+            0x03221004,
+            0x2042FFFF,
+            0x00C21004,
+            0x00401027,
+            0x00431024,
+            0x00581825,
+            0xACE30000,
+            0x8FB90008,
+            0x373900C0,
+            0x00000000,
+            0x090004EA,
+            0x8FB8000C,
+        ]

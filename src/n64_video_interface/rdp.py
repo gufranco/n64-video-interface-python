@@ -29,7 +29,20 @@ DMA_IO_SIGNATURE = (
     (UPPER_HALF, 0x201F0000),
 )
 TAIL_AFTER_MATH = len(OTHERMODE_MATH) + 4
-GBI1_ROUTINE = bytes.fromhex(
+SEND_DELAY = 0x8FB8000C
+SHIFT_FROM_W0 = 0x00193202
+LENGTH_FROM_W0 = 0x03221004
+ONE = 0x20020001
+MINUS_ONE = 0x2042FFFF
+SHIFT_MASK = 0x00C21004
+INVERT_MASK = 0x00401027
+CLEAR_FIELD = 0x00431024
+SET_FIELD = 0x00581825
+STORE_FIELD = 0xACE30000
+LOAD_HIGH_WORD = 0x8FB90008
+LOAD_FIELD = 0x8CE30000
+NOP = 0x00000000
+F3DEX_ROUTINE = bytes.fromhex(
     "8CE30000"
     "9365FFFB"
     "9366FFFA"
@@ -43,10 +56,41 @@ GBI1_ROUTINE = bytes.fromhex(
     "ACE30000"
     "8FB90008"
 )
-GBI1_SEND_DELAY = 0x8FB8000C
-GBI1_SEND_DELAY_AT = 52
-SHIFT_FROM_W0 = 0x00193202
-LENGTH_FROM_W0 = 0x03221004
+FAST3D_ROUTINE = bytes.fromhex(
+    "8CE30000"
+    "2008FFFF"
+    "9365FFFB"
+    "9366FFFA"
+    "20020001"
+    "00A21004"
+    "2042FFFF"
+    "00C21004"
+    "00481026"
+    "00431024"
+    "00581825"
+    "ACE30000"
+    "8FB90008"
+)
+REWRITTEN_BODY = (
+    LOAD_FIELD,
+    SHIFT_FROM_W0,
+    ONE,
+    LENGTH_FROM_W0,
+    MINUS_ONE,
+    SHIFT_MASK,
+    INVERT_MASK,
+    CLEAR_FIELD,
+    SET_FIELD,
+    STORE_FIELD,
+    LOAD_HIGH_WORD,
+)
+INLINE_FAMILIES = {"F3DEX": F3DEX_ROUTINE, "Fast3D": FAST3D_ROUTINE}
+
+
+@dataclass(frozen=True, slots=True)
+class InlineSite:
+    at: int
+    family: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,20 +165,22 @@ def find_dither_sites(rom: bytes) -> tuple[DitherSite, ...]:
     return tuple(site for site in sites if site is not None)
 
 
-def find_inline_sites(rom: bytes) -> tuple[int, ...]:
+def find_inline_sites(rom: bytes) -> tuple[InlineSite, ...]:
     return tuple(
-        at
-        for at in _aligned_hits(rom, GBI1_ROUTINE)
-        if at + GBI1_SEND_DELAY_AT + 4 <= len(rom)
-        and _word(rom, at + GBI1_SEND_DELAY_AT) == GBI1_SEND_DELAY
+        InlineSite(at, family)
+        for family, routine in INLINE_FAMILIES.items()
+        for at in _aligned_hits(rom, routine)
+        if at + len(routine) + 8 <= len(rom) and _word(rom, at + len(routine) + 4) == SEND_DELAY
     )
 
 
-def _gbi1_rewrite(at: int, rom: bytes, bits: int) -> tuple[tuple[int, int, int], ...]:
-    old = struct.unpack_from(">12I", rom, at)
-    new = (old[0], SHIFT_FROM_W0, old[3], LENGTH_FROM_W0, *old[5:12], ORI_W0 | bits)
+def _inline_rewrite(site: InlineSite, rom: bytes, bits: int) -> tuple[tuple[int, int, int], ...]:
+    length = len(INLINE_FAMILIES[site.family]) // 4
+    old = struct.unpack_from(f">{length}I", rom, site.at)
+    padding = (NOP,) * (length - len(REWRITTEN_BODY) - 1)
+    new = (*REWRITTEN_BODY, ORI_W0 | bits, *padding)
     return tuple(
-        (at + index * 4, before, after)
+        (site.at + index * 4, before, after)
         for index, (before, after) in enumerate(zip(old, new, strict=True))
         if before != after
     )
@@ -144,24 +190,25 @@ def count_microcodes(rom: bytes) -> int:
     return len(find_dither_sites(rom)) + len(find_inline_sites(rom))
 
 
+def _cave_writes(site: DitherSite, rom: bytes, bits: int) -> tuple[tuple[int, int, int], ...]:
+    to_cave = (OP_J << 26) | (site.cave_imem >> 2)
+    writes = (
+        (site.math_jump, to_cave),
+        (site.setom_jump, to_cave),
+        (site.cave, site.rdp_jump),
+        (site.cave + 4, ORI_W0 | bits),
+    )
+    return tuple((offset, _word(rom, offset), value) for offset, value in writes)
+
+
 def disable_dither(
     rom: bytes, bits: int = DITHER_BITS
 ) -> tuple[bytes, tuple[tuple[int, int, int], ...]]:
+    changes = (
+        *(change for site in find_dither_sites(rom) for change in _cave_writes(site, rom, bits)),
+        *(change for site in find_inline_sites(rom) for change in _inline_rewrite(site, rom, bits)),
+    )
     out = bytearray(rom)
-    changes: list[tuple[int, int, int]] = []
-    for site in find_dither_sites(rom):
-        to_cave = (OP_J << 26) | (site.cave_imem >> 2)
-        writes = (
-            (site.math_jump, to_cave),
-            (site.setom_jump, to_cave),
-            (site.cave, site.rdp_jump),
-            (site.cave + 4, ORI_W0 | bits),
-        )
-        for offset, value in writes:
-            changes.append((offset, _word(rom, offset), value))
-            struct.pack_into(">I", out, offset, value)
-    for at in find_inline_sites(rom):
-        for offset, before, after in _gbi1_rewrite(at, rom, bits):
-            changes.append((offset, before, after))
-            struct.pack_into(">I", out, offset, after)
-    return bytes(out), tuple(changes)
+    for offset, _, after in changes:
+        struct.pack_into(">I", out, offset, after)
+    return bytes(out), changes
