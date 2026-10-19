@@ -31,6 +31,7 @@ import bisect
 import struct
 from dataclasses import dataclass, replace
 
+from . import rdp
 from .byteorder import ByteOrder, detect, swap
 
 CTRL_TYPE_MASK = 0x00003
@@ -534,10 +535,23 @@ class PatchResult:
 
 NO_CHANGE_NEEDED = "every mode already has the requested settings"
 NO_TABLE = "no video mode table could be proven present"
+NO_MICROCODE = "no supported microcode was found, so the RDP dither cannot be changed"
+RDP_COLOR_DITHER = 0xC0
+RDP_ALPHA_DITHER = 0x30
+RDP_DITHER_LABELS = {
+    RDP_COLOR_DITHER: "colour",
+    RDP_ALPHA_DITHER: "alpha",
+    RDP_COLOR_DITHER | RDP_ALPHA_DITHER: "colour and alpha",
+}
 
 
 def _describe(
-    modes: int, entries: int, requests: tuple[SwitchRequest, ...], *, table_missing: bool
+    modes: int,
+    entries: int,
+    requests: tuple[SwitchRequest, ...],
+    *,
+    table_missing: bool,
+    rdp: tuple[int, int],
 ) -> str:
     parts = [f"{modes} of {entries} mode entries changed"] if entries else []
     if table_missing:
@@ -546,6 +560,10 @@ def _describe(
         count = sum(1 for request in requests if request.switch == switch)
         if count:
             parts.append(f"{count} {switch} request neutralised")
+    bits, microcodes = rdp
+    if bits:
+        plural = "microcode" if microcodes == 1 else "microcodes"
+        parts.append(f"{RDP_DITHER_LABELS[bits]} dither forced off in {microcodes} {plural}")
     return ", ".join(parts) or "nothing changed"
 
 
@@ -557,6 +575,8 @@ def _safe_patch_z64(
     gamma_dither: bool | None = None,
     gamma: bool | None = None,
     dither_filter: bool | None = None,
+    rdp_color_dither: bool | None = None,
+    rdp_alpha_dither: bool | None = None,
 ) -> PatchResult:
     """Edit the video configuration, then prove the result before returning it.
 
@@ -587,8 +607,15 @@ def _safe_patch_z64(
         "gamma_dither": gamma_dither,
         "gamma": gamma,
     }
-    if all(v is None for v in requested.values()) and dither_filter is None:
+    rdp_requested = (rdp_color_dither, rdp_alpha_dither)
+    if (
+        all(v is None for v in requested.values())
+        and dither_filter is None
+        and all(v is None for v in rdp_requested)
+    ):
         return PatchResult(False, "nothing requested")
+    if any(rdp_requested):
+        return PatchResult(False, "the RDP dither can be switched off here, never back on")
 
     if dither_filter:
         return PatchResult(False, "the dedither filter can be switched off here, never back on")
@@ -608,9 +635,15 @@ def _safe_patch_z64(
         if setting is False
         for request in find_switch_requests(rom, switch)
     )
+    rdp_bits = (RDP_COLOR_DITHER if rdp_color_dither is False else 0) | (
+        RDP_ALPHA_DITHER if rdp_alpha_dither is False else 0
+    )
+    microcodes = rdp.find_dither_sites(rom) if rdp_bits else ()
+    if rdp_bits and not microcodes:
+        return PatchResult(False, NO_MICROCODE)
     if wants_table and not entries and not requests:
         return PatchResult(False, NO_TABLE)
-    if dither_filter is False and not requests and not wants_table:
+    if dither_filter is False and not requests and not wants_table and not rdp_bits:
         return PatchResult(
             False, "this ROM has no way to switch the dedither filter on, so it is already off"
         )
@@ -646,6 +679,11 @@ def _safe_patch_z64(
         struct.pack_into(">I", out, request.guard, after)
         changes.append((request.guard, before, after))
 
+    if rdp_bits:
+        dithered, rdp_changes = rdp.disable_dither(bytes(out), rdp_bits)
+        out = bytearray(dithered)
+        changes.extend(rdp_changes)
+
     if not changes:
         return PatchResult(False, NO_CHANGE_NEEDED)
 
@@ -664,7 +702,11 @@ def _safe_patch_z64(
     return PatchResult(
         applied=True,
         reason=_describe(
-            modes_changed, len(entries), requests, table_missing=wants_table and not entries
+            modes_changed,
+            len(entries),
+            requests,
+            table_missing=wants_table and not entries,
+            rdp=(rdp_bits, len(microcodes)),
         ),
         data=sealed,
         modes_changed=modes_changed,
@@ -681,6 +723,8 @@ def safe_patch(
     gamma_dither: bool | None = None,
     gamma: bool | None = None,
     dither_filter: bool | None = None,
+    rdp_color_dither: bool | None = None,
+    rdp_alpha_dither: bool | None = None,
 ) -> PatchResult:
     big, order = _as_z64(rom)
     result = _safe_patch_z64(
@@ -690,5 +734,7 @@ def safe_patch(
         gamma_dither=gamma_dither,
         gamma=gamma,
         dither_filter=dither_filter,
+        rdp_color_dither=rdp_color_dither,
+        rdp_alpha_dither=rdp_alpha_dither,
     )
     return replace(result, data=swap(result.data, order)) if result.applied else result

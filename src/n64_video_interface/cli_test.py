@@ -147,6 +147,32 @@ class TestIps:
         assert not out.exists()
 
 
+class TestTheRdpDitherSwitches:
+    def test_both_switches_are_offered_by_both_editing_verbs(self):
+        # Arrange
+        parser = cli.build_parser()
+
+        # Act
+        parsed = [
+            parser.parse_args(
+                [
+                    verb,
+                    "game.z64",
+                    "--output",
+                    "o",
+                    "--no-rdp-color-dither",
+                    "--no-rdp-alpha-dither",
+                ]
+            )
+            for verb in ("patch", "ips")
+        ]
+
+        # Assert
+        assert [cli._requested(args) for args in parsed] == [
+            {"rdp_color_dither": False, "rdp_alpha_dither": False}
+        ] * 2
+
+
 class TestTheParser:
     def test_no_arguments_prints_usage(self, capsys):
         assert cli.main([]) == 2

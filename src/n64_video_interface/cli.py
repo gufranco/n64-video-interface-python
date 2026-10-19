@@ -29,6 +29,8 @@ SWITCHES = (
     ("no-gamma-dither", "gamma_dither", "disable gamma dithering"),
     ("no-gamma", "gamma", "disable gamma correction"),
     ("no-dither", "dither_filter", "disable the dedither filter, the main source of blur"),
+    ("no-rdp-color-dither", "rdp_color_dither", "disable the RDP colour dither in the microcode"),
+    ("no-rdp-alpha-dither", "rdp_alpha_dither", "disable the RDP alpha dither in the microcode"),
 )
 
 
