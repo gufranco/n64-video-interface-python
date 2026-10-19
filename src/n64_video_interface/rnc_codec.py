@@ -123,13 +123,13 @@ class Reader:
     def chunk(self) -> Chunk:
         tables = (self.table(), self.table(), self.table())
         raw, distance, length = (_lookup(table) for table in tables)
-        subs: tuple[Sub, ...] = ()
+        subs: list[Sub] = []
         for _ in range(self.read(COUNT_BITS) - 1):
             literals = self.literals(self.value(raw))
             gap = self.value(distance) + 1
             size = self.value(length) + MIN_MATCH
             self.copied(size)
-            subs = (*subs, Sub(literals, gap, size))
+            subs.append(Sub(literals, gap, size))
         return Chunk(tables, (*subs, Sub(self.literals(self.value(raw)))))
 
 

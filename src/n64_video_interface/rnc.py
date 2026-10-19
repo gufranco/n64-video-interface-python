@@ -2,21 +2,22 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
+from typing import cast
 
-from . import rnc_codec, rnc_parse
+from . import rnc2_codec, rnc2_parse, rnc_codec, rnc_parse
 from .edits import NO_TARGETS, Packed, RegionEdit, Settings, edit_region
-from .rnc_codec import HEADER
+from .rnc2_codec import Op
+from .rnc_codec import HEADER, Chunk
 
 MAGIC = b"RNC"
-METHOD = 1
+METHODS = (1, 2)
 MAX_SIZE = 0x800000
 LAYOUT = ">3sBIIHHBB"
 NOUN = "RNC stream"
 NO_ROOM = "a changed RNC stream no longer fits where it was"
+Tokens = tuple[Chunk, ...] | tuple[Op, ...]
 CRC_POLYNOMIAL = 0xA001
 BYTE = 0xFF
-PACKED_SIZE = ">I"
-PACKED_SIZE_AT = 8
 
 
 def _table() -> tuple[int, ...]:
@@ -41,6 +42,7 @@ def crc16(data: bytes) -> int:
 @dataclass(frozen=True, slots=True)
 class Stream:
     at: int
+    method: int
     size: int
     packed: int
     crc: int
@@ -52,16 +54,17 @@ class Stream:
         return slice(self.at + HEADER, self.at + HEADER + self.packed)
 
 
-def header(size: int, crc: int, body: bytes, leeway: int, chunks: int) -> bytes:
-    return struct.pack(LAYOUT, MAGIC, METHOD, size, len(body), crc, crc16(body), leeway, chunks)
+def header(stream: Stream, crc: int, body: bytes) -> bytes:
+    fields = (stream.method, stream.size, len(body), crc, crc16(body), stream.leeway, stream.chunks)
+    return struct.pack(LAYOUT, MAGIC, *fields)
 
 
 def _stream_at(rom: bytes, at: int) -> Stream | None:
     if at + HEADER > len(rom):
         return None
     _, method, size, packed, crc, packed_crc, leeway, chunks = struct.unpack_from(LAYOUT, rom, at)
-    stream = Stream(at, size, packed, crc, leeway, chunks)
-    if method != METHOD or not 0 < size <= MAX_SIZE or not 0 < packed <= MAX_SIZE:
+    stream = Stream(at, method, size, packed, crc, leeway, chunks)
+    if method not in METHODS or not 0 < size <= MAX_SIZE or not 0 < packed <= MAX_SIZE:
         return None
     if stream.body.stop > len(rom) or crc16(rom[stream.body]) != packed_crc:
         return None
@@ -69,31 +72,55 @@ def _stream_at(rom: bytes, at: int) -> Stream | None:
 
 
 def find_streams(rom: bytes) -> tuple[Stream, ...]:
-    found: tuple[Stream, ...] = ()
+    found: list[Stream] = []
     at = rom.find(MAGIC)
     while at >= 0:
         stream = _stream_at(rom, at)
-        found = (*found, stream) if stream else found
+        found.extend([stream] if stream else [])
         at = rom.find(MAGIC, stream.body.stop if stream else at + 1)
-    return found
+    return tuple(found)
 
 
-def leeway(data: bytes, at: int, size: int) -> int:
-    packed = int(struct.unpack_from(PACKED_SIZE, data, at + PACKED_SIZE_AT)[0])
-    return max(0, rnc_codec.read_all(data, at, size).margin - (size - packed))
+def leeway(data: bytes, stream: Stream) -> int:
+    if stream.method == METHODS[0]:
+        margin = rnc_codec.read_all(data, stream.at, stream.size).margin
+    else:
+        margin = rnc2_codec.read_all(data, stream.at, stream.size)[1].margin
+    return max(0, margin - (stream.size - stream.packed))
+
+
+def _decoded(rom: bytes, stream: Stream) -> tuple[Tokens, bytes]:
+    if stream.method == METHODS[0]:
+        chunks = rnc_codec.decode(rom, stream.at, stream.size)
+        return chunks, rnc_codec.expand(chunks)
+    ops = rnc2_codec.decode(rom, stream.at, stream.size)
+    return ops, rnc2_codec.expand(ops)
+
+
+def _rebuilt(stream: Stream, tokens: Tokens, desired: bytes) -> tuple[bytes, int]:
+    if stream.method == METHODS[0]:
+        chunks = cast("tuple[Chunk, ...]", tokens)
+        rebuilt = rnc_parse.improve(rnc_parse.split(chunks, desired), chunks, desired)
+        return rnc_codec.encode(rebuilt), len(rebuilt)
+    ops = cast("tuple[Op, ...]", tokens)
+    return rnc2_codec.encode(
+        rnc2_parse.improve(rnc2_parse.split(ops, desired), ops, desired)
+    ), stream.chunks
 
 
 def _edited(
     rom: bytes, stream: Stream, settings: Settings
 ) -> tuple[bytes, RegionEdit] | str | None:
-    chunks = rnc_codec.decode(rom, stream.at, stream.size)
-    edit = edit_region(rnc_codec.expand(chunks), settings)
+    tokens, data = _decoded(rom, stream)
+    edit = edit_region(data, settings)
     if not edit.changes:
         return None
-    rebuilt = rnc_parse.improve(rnc_parse.split(chunks, edit.data), chunks, edit.data)
-    body = rnc_codec.encode(rebuilt)
-    replaced = header(stream.size, crc16(edit.data), body, stream.leeway, len(rebuilt)) + body
-    if len(body) > stream.packed or leeway(replaced, 0, stream.size) > stream.leeway:
+    body, chunks = _rebuilt(stream, tokens, edit.data)
+    fresh = Stream(
+        0, stream.method, stream.size, len(body), crc16(edit.data), stream.leeway, chunks
+    )
+    replaced = header(fresh, fresh.crc, body) + body
+    if len(body) > stream.packed or leeway(replaced, fresh) > leeway(rom, stream):
         return NO_ROOM
     return replaced + bytes(stream.packed - len(body)), edit
 

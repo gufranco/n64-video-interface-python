@@ -1,9 +1,10 @@
 import random
 import struct
+from dataclasses import replace
 
 import pytest
 
-from n64_video_interface import rnc, rnc_codec, rnc_parse
+from n64_video_interface import rnc, rnc2_codec, rnc2_parse, rnc_codec, rnc_parse
 from n64_video_interface.conftest import mode_entry
 from n64_video_interface.edits import NO_TARGETS, Settings
 from n64_video_interface.rnc_codec import Chunk, Sub
@@ -16,10 +17,13 @@ VSYNC_AT = 0x90
 
 
 def packed_stream(chunks, size):
-    body = rnc_codec.encode(chunks)
-    crc = rnc.crc16(rnc_codec.expand(chunks))
-    leeway = rnc.leeway(rnc.header(size, crc, body, 0, len(chunks)) + body, 0, size)
-    return rnc.header(size, crc, body, leeway, len(chunks)) + body
+    return sealed(1, rnc_codec.encode(chunks), rnc_codec.expand(chunks), len(chunks))
+
+
+def sealed(method, body, data, chunks):
+    draft = rnc.Stream(0, method, len(data), len(body), rnc.crc16(data), 0, chunks)
+    margin = rnc.leeway(rnc.header(draft, draft.crc, body) + body, draft)
+    return rnc.header(replace(draft, leeway=margin), draft.crc, body) + body
 
 
 def optimal_stream(data):
@@ -58,7 +62,7 @@ class TestTheContainer:
     @pytest.mark.parametrize(
         "damage",
         [
-            lambda s: s[:3] + b"\x02" + s[4:],
+            lambda s: s[:3] + b"\x03" + s[4:],
             lambda s: s[:4] + struct.pack(">I", 0) + s[8:],
             lambda s: s[:8] + struct.pack(">I", 0x7FFFFFF) + s[12:],
             lambda s: s[:-1] + bytes([s[-1] ^ 0xFF]),
@@ -108,7 +112,7 @@ class TestTheContainer:
         stream = packed_stream(chunks, 0x4C2)
 
         # Act
-        margin = rnc.leeway(stream, 0, 0x4C2)
+        margin = rnc.leeway(stream, rnc.find_streams(stream)[0])
 
         # Assert
         assert margin == 245
@@ -127,6 +131,24 @@ class TestEditing:
         data = rnc_codec.expand(rnc_codec.decode(packed.data, stream.at, stream.size))
         assert (packed.where, data[0x84:0x88], stream.crc == rnc.crc16(data)) == (
             "in 1 RNC stream",
+            bytes.fromhex("0000321e"),
+            True,
+        )
+
+    def test_a_target_inside_a_method_2_stream_is_patched(self):
+        # Arrange
+        data = entry_block()
+        ops = (*rnc2_parse.optimal(data, 0, len(data)), rnc2_codec.End(1))
+        rom = rom_with(sealed(2, rnc2_codec.encode(ops), data, 1))
+
+        # Act
+        packed = rnc.edit_streams(rom, Settings(antialiasing=False))
+
+        # Assert
+        stream = rnc.find_streams(packed.data)[0]
+        decoded = rnc2_codec.expand(rnc2_codec.decode(packed.data, stream.at, stream.size))
+        assert (stream.method, decoded[0x84:0x88], stream.crc == rnc.crc16(decoded)) == (
+            2,
             bytes.fromhex("0000321e"),
             True,
         )
