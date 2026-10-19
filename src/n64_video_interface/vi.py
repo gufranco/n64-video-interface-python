@@ -186,6 +186,22 @@ def _plausible_ctrl(value: int) -> bool:
 
 
 VSYNC_OFFSET_FROM_CTRL = 12
+OSVIMODE_SIZE = 0x50
+OSVIMODE_TYPE_LIMIT = 56
+OSVIMODE_TYPE_SHIFT = 24
+OSVIMODE_PADDING_MASK = 0x00FFFFFF
+OSVIMODE_NONZERO_WORDS = (3, 5, 6, 7, 8, 11)
+
+
+def _has_osvimode_shape(rom: bytes, ctrl_offset: int) -> bool:
+    start = ctrl_offset - 4
+    if start < 0 or start + OSVIMODE_SIZE > len(rom):
+        return False
+    words = struct.unpack_from(">20I", rom, start)
+    kind = words[0]
+    if kind >> OSVIMODE_TYPE_SHIFT >= OSVIMODE_TYPE_LIMIT or kind & OSVIMODE_PADDING_MASK:
+        return False
+    return all(words[index] for index in OSVIMODE_NONZERO_WORDS)
 
 
 def find_mode_tables(rom: bytes) -> tuple[ModeEntry, ...]:
@@ -205,7 +221,7 @@ def find_mode_tables(rom: bytes) -> tuple[ModeEntry, ...]:
         at = rom.find(needle)
         while at >= 0:
             ctrl_offset = at - VSYNC_OFFSET_FROM_CTRL
-            if ctrl_offset >= 0 and ctrl_offset % 4 == 0 and ctrl_offset + 16 <= len(rom):
+            if ctrl_offset % 4 == 0 and _has_osvimode_shape(rom, ctrl_offset):
                 ctrl = struct.unpack_from(">I", rom, ctrl_offset)[0]
                 if _plausible_ctrl(ctrl):
                     width = struct.unpack_from(">I", rom, ctrl_offset + 4)[0]

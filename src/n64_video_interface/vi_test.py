@@ -9,20 +9,31 @@ LUI_AT_ONE = 0x3C010001
 LUI_V1_ONE = 0x3C030001
 
 
-def mode_entry(ctrl=NTSC_LAN1_CTRL, width=320, vsync=525, hsync=3093):
-    """A VI mode struct as libultra lays it out: type, then nine comRegs words."""
+def mode_entry(
+    ctrl=NTSC_LAN1_CTRL, width=320, vsync=525, hsync=3093, burst=0x03E52239, kind=0x02000000
+):
     return struct.pack(
-        ">IIIIIIIIII",
-        0x00000001,
+        ">20I",
+        kind,
         ctrl,
         width,
-        0x03E52239,
+        burst,
         vsync,
         hsync,
         0x0C150C15,
         0x006C02EC,
         0x00000200,
         0x00000000,
+        0x00000280,
+        0x00000400,
+        0x002501FF,
+        0x000E0204,
+        0x00000002,
+        0x00000280,
+        0x00000400,
+        0x002501FF,
+        0x000E0204,
+        0x00000002,
     )
 
 
@@ -146,6 +157,47 @@ class TestFindModeTables:
         rom = bytes(16) + mode_entry(width=12345)
 
         assert vi.find_mode_tables(rom) == ()
+
+    def test_ignores_three_matching_words_outside_an_osvimode(self):
+        # Arrange
+        rom = bytes(16) + mode_entry(burst=0, hsync=0)
+
+        # Act
+        found = vi.find_mode_tables(rom)
+
+        # Assert
+        assert found == ()
+
+    @pytest.mark.parametrize("kind", [56 << 24, 0x02000001])
+    def test_ignores_a_type_word_no_osvimode_carries(self, kind):
+        # Arrange
+        rom = bytes(16) + mode_entry(kind=kind)
+
+        # Act
+        found = vi.find_mode_tables(rom)
+
+        # Assert
+        assert found == ()
+
+    def test_ignores_a_full_osvimode_shape_holding_an_implausible_ctrl(self):
+        # Arrange
+        rom = bytes(16) + mode_entry(ctrl=0xDEADBEEF)
+
+        # Act
+        found = vi.find_mode_tables(rom)
+
+        # Assert
+        assert found == ()
+
+    def test_ignores_an_entry_cut_short_by_the_end_of_the_data(self):
+        # Arrange
+        rom = bytes(16) + mode_entry()[:40]
+
+        # Act
+        found = vi.find_mode_tables(rom)
+
+        # Assert
+        assert found == ()
 
     def test_ignores_a_plausible_ctrl_with_an_implausible_vsync(self):
         rom = bytes(16) + mode_entry(vsync=999)
@@ -287,6 +339,8 @@ class TestScannerEquivalence:
             if _s.unpack_from(">I", rom, off + 4)[0] not in vi.PLAUSIBLE_WIDTHS:
                 continue
             if _s.unpack_from(">I", rom, off + 12)[0] not in vi.VSYNC_BY_STANDARD:
+                continue
+            if not vi._has_osvimode_shape(rom, off):
                 continue
             out.append(off)
         return out
