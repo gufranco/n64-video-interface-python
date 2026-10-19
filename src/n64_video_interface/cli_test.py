@@ -22,7 +22,7 @@ def rom_with_table(ctrl: int = 0x0000311E) -> bytes:
     data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000, title="SHARP TEST ROM"))
     entry = mode_entry(ctrl=ctrl)
     data[0x2000 : 0x2000 + len(entry)] = entry
-    return vi.reseal(bytes(data))
+    return vi.reseal(bytes(data), "6102")
 
 
 @pytest.fixture

@@ -464,7 +464,7 @@ CHECKSUM_END = CHECKSUM_START + 0x100000
 CRC1_OFFSET = 0x10
 CRC2_OFFSET = 0x14
 
-DEFAULT_RESEAL_CIC = "6102"
+UNKNOWN_BOOT_CHIP = "the boot code names no known chip, so the seal is unknown"
 
 
 def reseal(rom: bytes, cic: str | None = None) -> bytes:
@@ -482,7 +482,9 @@ def reseal(rom: bytes, cic: str | None = None) -> bytes:
         raise ValueError(
             f"data is too short to checksum, need {CHECKSUM_END} bytes, got {len(rom)}"
         )
-    chosen = cic or checksum.verify(rom)[1] or DEFAULT_RESEAL_CIC
+    chosen = cic or checksum.boot_chip(rom)
+    if chosen is None:
+        raise ValueError(UNKNOWN_BOOT_CHIP)
     pair = checksum.compute(rom, chosen)
     if pair is None:
         raise ValueError(f"the checksum could not be computed over {len(rom)} bytes")

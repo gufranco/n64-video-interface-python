@@ -386,7 +386,7 @@ class TestSafePatch:
 
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         base[0x2000 : 0x2000 + len(mode_entry(ctrl=ctrl))] = mode_entry(ctrl=ctrl)
-        return vi.reseal(bytes(base))
+        return vi.reseal(bytes(base), "6102")
 
     def test_a_sealed_rom_starts_valid(self):
         from n64_video_interface import checksum
@@ -400,7 +400,7 @@ class TestSafePatch:
         from n64_video_interface.conftest import make_rom
 
         result = vi.safe_patch(
-            vi.reseal(make_rom(size=vi.CHECKSUM_END + 0x2000)), antialiasing=False
+            vi.reseal(make_rom(size=vi.CHECKSUM_END + 0x2000), "6102"), antialiasing=False
         )
 
         assert result.applied is False
@@ -504,7 +504,7 @@ class TestSafePatch:
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         blob, _, _, _ = rom_with_dither_request()
         base[0x2000 : 0x2000 + len(blob)] = blob
-        rom = vi.reseal(bytes(base))
+        rom = vi.reseal(bytes(base), "6102")
 
         result = vi.safe_patch(rom, dither_filter=False)
 
@@ -519,7 +519,7 @@ class TestSafePatch:
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         blob, _, _, _ = rom_with_dither_request()
         base[0x2000 : 0x2000 + len(blob)] = blob
-        rom = vi.reseal(bytes(base))
+        rom = vi.reseal(bytes(base), "6102")
 
         result = vi.safe_patch(rom, dither_filter=False)
 
@@ -538,7 +538,7 @@ class TestReseal:
         from n64_video_interface import checksum
         from n64_video_interface.conftest import make_rom
 
-        sealed = vi.reseal(make_rom(size=vi.CHECKSUM_END + 0x1000))
+        sealed = vi.reseal(make_rom(size=vi.CHECKSUM_END + 0x1000), "6102")
 
         assert checksum.verify(sealed)[0] is True
 
@@ -546,7 +546,7 @@ class TestReseal:
         from n64_video_interface.conftest import make_rom
 
         original = make_rom(size=vi.CHECKSUM_END + 0x1000)
-        sealed = vi.reseal(original)
+        sealed = vi.reseal(original, "6102")
         differing = {i for i in range(len(original)) if original[i] != sealed[i]}
 
         assert differing <= set(range(0x10, 0x18))
@@ -554,6 +554,41 @@ class TestReseal:
     def test_refuses_data_too_short_to_checksum(self):
         with pytest.raises(ValueError, match="too short"):
             vi.reseal(bytes(0x100))
+
+
+class TestResealNamesTheChipFromTheBootCode:
+    def rom_with_boot_code(self) -> bytes:
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x1000))
+        data[0x40:0x1000] = (bytes(range(256)) * 16)[: 0x1000 - 0x40]
+        return bytes(data)
+
+    def test_it_seals_with_the_chip_the_boot_code_names(self, monkeypatch):
+        # Arrange
+        import zlib
+
+        from n64_video_interface import checksum
+
+        rom = self.rom_with_boot_code()
+        monkeypatch.setitem(checksum.IPL3_CRC32, zlib.crc32(rom[0x40:0x1000]), "6105")
+
+        # Act
+        sealed = vi.reseal(rom)
+
+        # Assert
+        assert checksum.verify(sealed) == (True, "6105")
+
+    def test_it_refuses_boot_code_that_names_no_chip(self):
+        # Arrange
+        rom = self.rom_with_boot_code()
+
+        # Act
+        with pytest.raises(ValueError) as caught:
+            vi.reseal(rom)
+
+        # Assert
+        assert str(caught.value) == "the boot code names no known chip, so the seal is unknown"
 
 
 class TestEmitIps:
@@ -590,7 +625,7 @@ class TestEmitIps:
 
         base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         base[0x2000 : 0x2000 + len(mode_entry())] = mode_entry()
-        original = vi.reseal(bytes(base))
+        original = vi.reseal(bytes(base), "6102")
         result = vi.safe_patch(original, antialiasing=False)
 
         patch = vi.make_ips(result.changes, checksum_words=result.data)
@@ -800,7 +835,7 @@ class TestResealRefusals:
         monkeypatch.setattr(module, "compute", lambda rom, cic: None)
 
         with pytest.raises(ValueError, match="could not be computed"):
-            vi.reseal(bytes(vi.CHECKSUM_END))
+            vi.reseal(bytes(vi.CHECKSUM_END), "6102")
 
 
 class TestReportConvenience:
@@ -811,7 +846,7 @@ class TestReportConvenience:
         entry = mode_entry(ctrl=0x0000311E)
         data[0x2000 : 0x2000 + len(entry)] = entry
 
-        assert vi.audit(vi.reseal(bytes(data))).blurs is True
+        assert vi.audit(vi.reseal(bytes(data), "6102")).blurs is True
 
     def test_a_rom_with_no_table_blurs_as_far_as_this_can_tell(self):
         from n64_video_interface.conftest import make_rom
@@ -834,7 +869,7 @@ class TestSafePatchRefusesAnEditThatDidNotTake:
         data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         entry = mode_entry(ctrl=0x0000311E)
         data[0x2000 : 0x2000 + len(entry)] = entry
-        rom = vi.reseal(bytes(data))
+        rom = vi.reseal(bytes(data), "6102")
 
         monkeypatch.setattr(vi, "reseal", lambda blob, cic=None: rom)
 
@@ -895,7 +930,7 @@ class TestARequestAlreadyNeutralised:
 
         data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         struct.pack_into(">I", data, 0x3000, 0xABCD0000)
-        rom = vi.reseal(bytes(data))
+        rom = vi.reseal(bytes(data), "6102")
         monkeypatch.setattr(vi, "find_dither_requests", lambda blob: (self.request_at(0x3000),))
 
         result = vi.safe_patch(rom, dither_filter=False)
@@ -911,7 +946,7 @@ class TestResealProducingSomethingThatDoesNotValidate:
         data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
         entry = mode_entry(ctrl=0x0000311E)
         data[0x2000 : 0x2000 + len(entry)] = entry
-        rom = vi.reseal(bytes(data))
+        rom = vi.reseal(bytes(data), "6102")
 
         broken = bytearray(rom)
         struct.pack_into(">I", broken, 0x10, 0xFFFFFFFF)

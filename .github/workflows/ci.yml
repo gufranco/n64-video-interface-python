@@ -172,7 +172,7 @@ jobs:
               *(0x00000280, 0x00000400, 0x002501FF, 0x000E0204, 0x00000002) * 2,
           )
           body[0x2000 : 0x2000 + len(entry)] = entry
-          Path("sample.z64").write_bytes(vi.reseal(bytes(body)))
+          Path("sample.z64").write_bytes(vi.reseal(bytes(body), "6102"))
 
           def run(*args):
               done = subprocess.run(["n64vi", *args], capture_output=True, text=True)
