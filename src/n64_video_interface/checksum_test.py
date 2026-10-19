@@ -53,6 +53,27 @@ class TestCompute:
             checksum.compute(body, "9999")
 
 
+SEED_THEN_ZEROS_6103 = (0xE498A9E8, 0x689C1E60)
+
+
+def seed_then_zeros(cic: str) -> bytes:
+    rom = bytearray(checksum.START + checksum.LENGTH)
+    struct.pack_into(">I", rom, checksum.START, checksum.SEEDS[cic])
+    return bytes(rom)
+
+
+class TestAWordEqualToTheRunningValue:
+    def test_a_tie_takes_the_rotated_branch_as_the_boot_code_does(self):
+        # Arrange
+        rom = seed_then_zeros("6103")
+
+        # Act
+        produced = checksum.compute(rom, "6103")
+
+        # Assert
+        assert produced == SEED_THEN_ZEROS_6103
+
+
 class TestVerify:
     def test_accepts_a_rom_carrying_its_own_6102_checksum(self, body, computed):
         rom = with_checksums(body, computed["6102"])

@@ -93,7 +93,7 @@ def compute(rom: bytes, cic: str) -> tuple[int, int] | None:
         t3 ^= d
         rotated = _rol(d, d & 0x1F)
         t5 = (t5 + rotated) & MASK
-        t2 ^= rotated if t2 > d else (t6 ^ d)
+        t2 ^= rotated if t2 >= d else (t6 ^ d)
         if uses_boot_table:
             t1 = (t1 + (unpack(">I", rom, BOOT_TABLE + (i & 0xFF))[0] ^ d)) & MASK
         else:
