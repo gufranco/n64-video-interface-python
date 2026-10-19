@@ -3,12 +3,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import fields, replace
 
-from . import rarezip
+from . import rarezip, rnc
 from .byteorder import swap, to_big_endian
 from .checksum import verify
 from .edits import (
     CHECKSUM_UNKNOWN,
     NO_TABLE,
+    NO_TARGETS,
+    Packed,
     PatchResult,
     RegionEdit,
     Settings,
@@ -37,6 +39,7 @@ RDP_DITHER_ON = "the RDP dither can be switched off here, never back on"
 NO_MICROCODE = "no supported microcode was found, so the RDP dither cannot be changed"
 ALREADY_OFF = "this ROM has no way to switch the dedither filter on, so it is already off"
 NO_CHANGE_NEEDED = "every mode already has the requested settings"
+PACKERS = (rarezip.edit_groups, rnc.edit_streams)
 
 
 def _request_refusal(settings: Settings) -> str | None:
@@ -61,11 +64,18 @@ def _nothing_reason(edits: Sequence[RegionEdit], settings: Settings) -> str:
     return NO_CHANGE_NEEDED
 
 
-def _reason(edits: Sequence[RegionEdit], settings: Settings, packed: rarezip.Packed | str) -> str:
-    text = describe(edits, settings)
-    if isinstance(packed, rarezip.Packed):
-        return f"{text}, {rarezip.in_groups(packed.groups)}"
-    return text if packed == rarezip.NO_TARGETS else f"{text}, compressed code left alone: {packed}"
+def _compressed(
+    data: bytes, settings: Settings
+) -> tuple[bytes, tuple[RegionEdit, ...], tuple[str, ...]]:
+    edits: tuple[RegionEdit, ...] = ()
+    notes: tuple[str, ...] = ()
+    for packer in PACKERS:
+        packed = packer(data, settings)
+        if isinstance(packed, Packed):
+            data, edits, notes = packed.data, (*edits, *packed.edits), (*notes, packed.where)
+        elif packed != NO_TARGETS:
+            notes = (*notes, f"compressed code left alone: {packed}")
+    return data, edits, notes
 
 
 def _patch_big_endian(rom: bytes, settings: Settings) -> PatchResult:
@@ -73,16 +83,15 @@ def _patch_big_endian(rom: bytes, settings: Settings) -> PatchResult:
     if refusal is not None:
         return PatchResult(False, refusal)
     direct = edit_region(rom, settings)
-    packed = rarezip.edit_groups(direct.data, settings)
-    edits = (direct, *packed.edits) if isinstance(packed, rarezip.Packed) else (direct,)
+    data, packed, notes = _compressed(direct.data, settings)
+    edits = (direct, *packed)
     if not any(edit.changes for edit in edits):
         return PatchResult(False, _nothing_reason(edits, settings))
     valid, cic = verify(rom)
     if not valid or cic is None:
         return PatchResult(False, CHECKSUM_UNKNOWN)
-    data = packed.data if isinstance(packed, rarezip.Packed) else direct.data
     modes = sum(edit.modes_changed for edit in edits)
-    reason = _reason(edits, settings, packed)
+    reason = ", ".join((describe(edits, settings), *notes))
     return PatchResult(True, reason, reseal(data, cic), modes, direct.changes, cic)
 
 

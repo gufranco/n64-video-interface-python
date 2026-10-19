@@ -7,7 +7,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .checksum import verify
-from .edits import CHECKSUM_UNKNOWN, PatchResult, RegionEdit, Settings, describe, edit_region
+from .edits import (
+    CHECKSUM_UNKNOWN,
+    NO_TARGETS,
+    Packed,
+    PatchResult,
+    RegionEdit,
+    Settings,
+    describe,
+    edit_region,
+)
 from .seal import reseal
 
 MAGIC = b"\x11\x72"
@@ -22,9 +31,9 @@ RAW_DEFLATE = -15
 LEVEL = 9
 MEMORY_LEVELS = range(1, 10)
 STRATEGIES = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED)
-NO_TARGETS = "no compressed block holds anything this can change"
 NO_CHECKSUM = "a changed block's integrity checksum could not be located, so it is left alone"
 NO_ROOM = "a changed block no longer fits where it was"
+NOUN = "compressed group"
 NONZERO = re.compile(rb"[^\x00]")
 
 
@@ -113,13 +122,6 @@ def repack(group: Group, contents: Sequence[bytes]) -> bytes | None:
     return padded + bytes(span - len(padded)) if len(padded) <= span else None
 
 
-@dataclass(frozen=True, slots=True)
-class Packed:
-    data: bytes
-    edits: tuple[RegionEdit, ...]
-    groups: int
-
-
 def _with_checksums(rom: bytes, group: Group, edits: Sequence[RegionEdit]) -> bytes | None:
     out = bytearray(rom)
     changed = [(s, e) for s, e in zip(group.streams, edits, strict=True) if e.data != s.data]
@@ -154,7 +156,7 @@ def edit_groups(rom: bytes, settings: Settings) -> Packed | str:
             refusal = result
             continue
         out, done, groups = result, (*done, *edits), groups + 1
-    return Packed(out, done, groups) if groups else refusal
+    return Packed(out, done, groups, NOUN) if groups else refusal
 
 
 def patch(rom: bytes, settings: Settings) -> PatchResult:
@@ -164,10 +166,6 @@ def patch(rom: bytes, settings: Settings) -> PatchResult:
     valid, cic = verify(rom)
     if not valid or cic is None:
         return PatchResult(False, CHECKSUM_UNKNOWN)
-    reason = f"{describe(packed.edits, settings)}, {in_groups(packed.groups)}"
+    reason = f"{describe(packed.edits, settings)}, {packed.where}"
     modes = sum(edit.modes_changed for edit in packed.edits)
     return PatchResult(True, reason, reseal(packed.data, cic), modes, (), cic)
-
-
-def in_groups(count: int) -> str:
-    return f"in {count} compressed {'group' if count == 1 else 'groups'}"

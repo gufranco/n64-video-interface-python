@@ -6,7 +6,7 @@ import pytest
 
 from n64_video_interface import rarezip
 from n64_video_interface.conftest import SEALABLE_SIZE, make_rom, mode_entry, routine
-from n64_video_interface.edits import CHECKSUM_UNKNOWN, Settings
+from n64_video_interface.edits import CHECKSUM_UNKNOWN, NO_TARGETS, Settings
 from n64_video_interface.seal import reseal
 
 GROUP_AT = 0x200000
@@ -172,7 +172,7 @@ class TestThePatch:
         result = rarezip.patch(rom, Settings(antialiasing=False))
 
         # Assert
-        assert (result.applied, result.reason) == (False, rarezip.NO_TARGETS)
+        assert (result.applied, result.reason) == (False, NO_TARGETS)
 
     def test_a_group_that_no_longer_fits_is_refused(self):
         # Arrange

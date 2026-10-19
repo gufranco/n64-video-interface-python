@@ -14,6 +14,7 @@ CHECKSUM_UNKNOWN = (
     "the existing checksum does not validate, so the boot chip is unknown "
     "and the result could not be resealed correctly"
 )
+NO_TARGETS = "no compressed block holds anything this can change"
 NO_MICROCODE_NOTE = "no supported microcode was found, so the RDP dither is unchanged"
 TABLE_SETTINGS = ("antialiasing", "divot", "gamma_dither", "gamma")
 SWITCH_SETTINGS = (
@@ -75,6 +76,18 @@ class RegionEdit:
     modes_changed: int
     requests: tuple[SwitchRequest, ...]
     microcodes: int
+
+
+@dataclass(frozen=True, slots=True)
+class Packed:
+    data: bytes
+    edits: tuple[RegionEdit, ...]
+    count: int
+    noun: str
+
+    @property
+    def where(self) -> str:
+        return f"in {self.count} {self.noun}{'' if self.count == 1 else 's'}"
 
 
 def _word(data: bytes, at: int) -> int:
