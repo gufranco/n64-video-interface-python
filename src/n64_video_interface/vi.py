@@ -638,7 +638,7 @@ def _safe_patch_z64(
     rdp_bits = (RDP_COLOR_DITHER if rdp_color_dither is False else 0) | (
         RDP_ALPHA_DITHER if rdp_alpha_dither is False else 0
     )
-    microcodes = rdp.find_dither_sites(rom) if rdp_bits else ()
+    microcodes = rdp.count_microcodes(rom) if rdp_bits else 0
     if rdp_bits and not microcodes:
         return PatchResult(False, NO_MICROCODE)
     if wants_table and not entries and not requests:
@@ -706,7 +706,7 @@ def _safe_patch_z64(
             len(entries),
             requests,
             table_missing=wants_table and not entries,
-            rdp=(rdp_bits, len(microcodes)),
+            rdp=(rdp_bits, microcodes),
         ),
         data=sealed,
         modes_changed=modes_changed,

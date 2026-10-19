@@ -253,3 +253,94 @@ class TestSafePatchTurnsTheRdpDitherOff:
             False,
             "the RDP dither can be switched off here, never back on",
         )
+
+
+GBI1_ROUTINE = (
+    0x0900049E,
+    0x23A70008,
+    0x23A7000C,
+    0x8CE30000,
+    0x9365FFFB,
+    0x9366FFFA,
+    0x20020001,
+    0x00A21004,
+    0x2042FFFF,
+    0x00C21004,
+    0x00401027,
+    0x00431024,
+    0x00581825,
+    0xACE30000,
+    0x8FB90008,
+    0x090004DB,
+    0x8FB8000C,
+)
+GBI1_AT = 0x200
+
+
+def gbi1_rom():
+    blob = bytearray(0x400)
+    for index, value in enumerate(GBI1_ROUTINE):
+        struct.pack_into(">I", blob, GBI1_AT + index * 4, value)
+    return bytes(blob)
+
+
+class TestTheOlderMicrocodeFamily:
+    def test_the_shared_othermode_routine_is_found(self):
+        # Arrange
+        rom = gbi1_rom()
+
+        # Act
+        sites = rdp.find_inline_sites(rom)
+
+        # Assert
+        assert sites == (GBI1_AT + 12,)
+
+    def test_the_routine_is_rewritten_to_force_the_dither_off_in_the_same_space(self):
+        # Arrange
+        rom = gbi1_rom()
+
+        # Act
+        out, changes = rdp.disable_dither(rom)
+
+        # Assert
+        assert [word(out, GBI1_AT + index * 4) for index in range(len(GBI1_ROUTINE))] == [
+            0x0900049E,
+            0x23A70008,
+            0x23A7000C,
+            0x8CE30000,
+            0x00193202,
+            0x20020001,
+            0x03221004,
+            0x2042FFFF,
+            0x00C21004,
+            0x00401027,
+            0x00431024,
+            0x00581825,
+            0xACE30000,
+            0x8FB90008,
+            0x373900F0,
+            0x090004DB,
+            0x8FB8000C,
+        ]
+        assert len(changes) == 11
+
+    def test_a_rewritten_routine_is_left_alone(self):
+        # Arrange
+        once, _ = rdp.disable_dither(gbi1_rom())
+
+        # Act
+        twice, changes = rdp.disable_dither(once)
+
+        # Assert
+        assert (twice, changes) == (once, ())
+
+    def test_a_routine_with_a_different_tail_is_not_rewritten(self):
+        # Arrange
+        blob = bytearray(gbi1_rom())
+        struct.pack_into(">I", blob, GBI1_AT + 16 * 4, 0)
+
+        # Act
+        sites = rdp.find_inline_sites(bytes(blob))
+
+        # Assert
+        assert sites == ()

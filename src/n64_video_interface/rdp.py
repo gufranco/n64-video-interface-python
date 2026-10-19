@@ -29,6 +29,24 @@ DMA_IO_SIGNATURE = (
     (UPPER_HALF, 0x201F0000),
 )
 TAIL_AFTER_MATH = len(OTHERMODE_MATH) + 4
+GBI1_ROUTINE = bytes.fromhex(
+    "8CE30000"
+    "9365FFFB"
+    "9366FFFA"
+    "20020001"
+    "00A21004"
+    "2042FFFF"
+    "00C21004"
+    "00401027"
+    "00431024"
+    "00581825"
+    "ACE30000"
+    "8FB90008"
+)
+GBI1_SEND_DELAY = 0x8FB8000C
+GBI1_SEND_DELAY_AT = 52
+SHIFT_FROM_W0 = 0x00193202
+LENGTH_FROM_W0 = 0x03221004
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +121,29 @@ def find_dither_sites(rom: bytes) -> tuple[DitherSite, ...]:
     return tuple(site for site in sites if site is not None)
 
 
+def find_inline_sites(rom: bytes) -> tuple[int, ...]:
+    return tuple(
+        at
+        for at in _aligned_hits(rom, GBI1_ROUTINE)
+        if at + GBI1_SEND_DELAY_AT + 4 <= len(rom)
+        and _word(rom, at + GBI1_SEND_DELAY_AT) == GBI1_SEND_DELAY
+    )
+
+
+def _gbi1_rewrite(at: int, rom: bytes, bits: int) -> tuple[tuple[int, int, int], ...]:
+    old = struct.unpack_from(">12I", rom, at)
+    new = (old[0], SHIFT_FROM_W0, old[3], LENGTH_FROM_W0, *old[5:12], ORI_W0 | bits)
+    return tuple(
+        (at + index * 4, before, after)
+        for index, (before, after) in enumerate(zip(old, new, strict=True))
+        if before != after
+    )
+
+
+def count_microcodes(rom: bytes) -> int:
+    return len(find_dither_sites(rom)) + len(find_inline_sites(rom))
+
+
 def disable_dither(
     rom: bytes, bits: int = DITHER_BITS
 ) -> tuple[bytes, tuple[tuple[int, int, int], ...]]:
@@ -119,4 +160,8 @@ def disable_dither(
         for offset, value in writes:
             changes.append((offset, _word(rom, offset), value))
             struct.pack_into(">I", out, offset, value)
+    for at in find_inline_sites(rom):
+        for offset, before, after in _gbi1_rewrite(at, rom, bits):
+            changes.append((offset, before, after))
+            struct.pack_into(">I", out, offset, after)
     return bytes(out), tuple(changes)
