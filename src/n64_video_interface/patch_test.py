@@ -16,6 +16,8 @@ from n64_video_interface.patch import (
     RDP_DITHER_ON,
     safe_patch,
 )
+from n64_video_interface.rarezip import NO_CHECKSUM
+from n64_video_interface.rarezip_test import rom_with_group
 from n64_video_interface.rdp_test import TEXT_BASE, microcode_rom
 from n64_video_interface.seal import reseal
 
@@ -219,6 +221,37 @@ class TestTheRdpDither:
         assert (result.applied, result.reason) == (
             True,
             f"{label} dither forced off in 1 microcode",
+        )
+
+
+class TestCompressedCode:
+    def test_targets_inside_a_compressed_group_are_patched(self):
+        # Arrange
+        rom = rom_with_group()
+
+        # Act
+        result = safe_patch(rom, antialiasing=False)
+
+        # Assert
+        assert (result.applied, result.reason, checksum.verify(result.data)) == (
+            True,
+            "1 of 1 mode entries changed, in 1 compressed group",
+            (True, "6102"),
+        )
+
+    def test_direct_targets_are_patched_when_the_compressed_group_cannot_be(self):
+        # Arrange
+        rom = bytearray(rom_with_group(crc_bin=False))
+        rom[TABLE_AT : TABLE_AT + 80] = mode_entry()
+        sealed = reseal(bytes(rom), "6102")
+
+        # Act
+        result = safe_patch(sealed, antialiasing=False)
+
+        # Assert
+        assert (result.applied, result.reason) == (
+            True,
+            f"1 of 1 mode entries changed, compressed code left alone: {NO_CHECKSUM}",
         )
 
 
