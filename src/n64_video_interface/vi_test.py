@@ -601,62 +601,6 @@ class TestResealNamesTheChipFromTheBootCode:
         assert str(caught.value) == "the boot code names no known chip, so the seal is unknown"
 
 
-class TestEmitIps:
-    def test_produces_a_valid_ips_header_and_terminator(self):
-        patch = vi.make_ips([(0x1000, 0x0000311E, 0x0000320E)])
-
-        assert patch.startswith(b"PATCH")
-        assert patch.endswith(b"EOF")
-
-    def test_encodes_one_record_per_change(self):
-        patch = vi.make_ips([(0x1000, 0, 0x11223344), (0x2000, 0, 0x55667788)])
-
-        assert patch.count(b"\x00\x04") == 2
-
-    def test_writes_the_new_value_big_endian(self):
-        patch = vi.make_ips([(0x001000, 0, 0x0000320E)])
-
-        assert b"\x00\x00\x32\x0e" in patch
-
-    def test_encodes_the_offset_as_three_bytes(self):
-        patch = vi.make_ips([(0x123456, 0, 1)])
-
-        assert b"\x12\x34\x56" in patch
-
-    def test_an_empty_change_list_still_produces_a_valid_patch(self):
-        assert vi.make_ips([]) == b"PATCHEOF"
-
-    def test_refuses_an_offset_ips_cannot_address(self):
-        with pytest.raises(ValueError, match="beyond"):
-            vi.make_ips([(0x1000000, 0, 1)])
-
-    def test_applying_the_patch_reproduces_the_patched_rom(self):
-        from n64_video_interface.conftest import make_rom
-
-        base = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
-        base[0x2000 : 0x2000 + len(mode_entry())] = mode_entry()
-        original = vi.reseal(bytes(base), "6102")
-        result = vi.safe_patch(original, antialiasing=False)
-
-        patch = vi.make_ips(result.changes, checksum_words=result.data)
-        rebuilt = bytearray(original)
-        i = 5
-        while patch[i : i + 3] != b"EOF":
-            off = int.from_bytes(patch[i : i + 3], "big")
-            i += 3
-            size = int.from_bytes(patch[i : i + 2], "big")
-            i += 2
-            rebuilt[off : off + size] = patch[i : i + size]
-            i += size
-
-        assert bytes(rebuilt) == result.data
-
-    def test_includes_the_resealed_checksum_when_asked(self):
-        patch = vi.make_ips([(0x2004, 0, 1)], checksum_words=bytes(0x20))
-
-        assert b"\x00\x00\x10" in patch
-
-
 def dither_block(base, *, flag=0x0040, branch_op=0x04, guard_gap=1, skip=6, setter_word=LUI_AT_ONE):
     """A minimal OS_VI_DITHER_FILTER_ON block laid out like a compiled one.
 

@@ -626,35 +626,3 @@ def safe_patch(
         changes=tuple(changes),
         cic=cic,
     )
-
-
-IPS_MAX_OFFSET = 0xFFFFFF
-
-
-def make_ips(
-    changes: list[tuple[int, int, int]] | tuple[tuple[int, int, int], ...],
-    checksum_words: bytes | None = None,
-) -> bytes:
-    """Express the same edits as an IPS patch, leaving the ROM file untouched.
-
-    Useful when the ROM must stay byte-identical on disk and the change is
-    applied by some other tool. A device that matches one external patch per ROM
-    cannot take this alongside a patch the game already needs, because the two
-    would compete for the same slot.
-
-    When `checksum_words` is given, the two header checksum words are included as
-    a record, since editing a mode table almost always invalidates them.
-    """
-    out = bytearray(b"PATCH")
-    records = [(offset, struct.pack(">I", new)) for offset, _, new in changes]
-    if checksum_words is not None:
-        records.append((CRC1_OFFSET, bytes(checksum_words[CRC1_OFFSET : CRC1_OFFSET + 8])))
-    for offset, payload in records:
-        if offset > IPS_MAX_OFFSET:
-            raise ValueError(
-                f"offset 0x{offset:X} is beyond what IPS can address, 0x{IPS_MAX_OFFSET:X}"
-            )
-        out += offset.to_bytes(3, "big")
-        out += len(payload).to_bytes(2, "big")
-        out += payload
-    return bytes(out + b"EOF")

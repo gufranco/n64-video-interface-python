@@ -15,6 +15,7 @@ import pytest
 
 from n64_video_interface import cli, vi
 from n64_video_interface.conftest import make_rom
+from n64_video_interface.ips_test import apply_ips
 from n64_video_interface.vi_test import mode_entry
 
 
@@ -197,19 +198,36 @@ class TestFailingToWrite:
         assert code == 1
         assert "could not read" in capsys.readouterr().err
 
-    def test_an_offset_beyond_what_ips_addresses_is_refused(self, sample, tmp_path, monkeypatch):
-        from n64_video_interface import vi as module
-
-        def too_far(*args, **kwargs):
-            raise ValueError("offset 0x1000000 is beyond what IPS can address")
-
-        monkeypatch.setattr(module, "make_ips", too_far)
+    def test_an_edit_beyond_what_ips_addresses_is_refused(self, tmp_path, capsys):
+        # Arrange
+        data = bytearray(make_rom(size=0x1000100, title="SHARP TEST ROM"))
+        entry = mode_entry()
+        data[0x1000000 : 0x1000000 + len(entry)] = entry
+        rom = tmp_path / "big.z64"
+        rom.write_bytes(vi.reseal(bytes(data), "6102"))
         out = tmp_path / "sharp.ips"
 
-        code = cli.main(["ips", str(sample), "--no-aa", "--output", str(out)])
+        # Act
+        code = cli.main(["ips", str(rom), "--no-aa", "--output", str(out)])
 
-        assert code == 1
-        assert not out.exists()
+        # Assert
+        assert (code, out.exists(), capsys.readouterr().err) == (
+            1,
+            False,
+            "refused: offset 0x1000006 is beyond what IPS can address, 0xFFFFFF\n",
+        )
+
+    def test_applying_the_written_patch_reproduces_the_patched_rom(self, sample, tmp_path):
+        # Arrange
+        out = tmp_path / "sharp.ips"
+        edited = tmp_path / "sharp.z64"
+        cli.main(["patch", str(sample), "--no-aa", "--output", str(edited)])
+
+        # Act
+        cli.main(["ips", str(sample), "--no-aa", "--output", str(out)])
+
+        # Assert
+        assert apply_ips(sample.read_bytes(), out.read_bytes()) == edited.read_bytes()
 
 
 class TestTheEntryPoints:

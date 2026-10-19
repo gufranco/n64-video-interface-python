@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import vi
 from .header import parse as parse_header
+from .ips import IpsError, make_ips
 from .version import VERSION
 
 OUTPUT_IS_INPUT = "refused: the output names the ROM being read, which would destroy it"
@@ -132,10 +133,10 @@ def cmd_ips(args: argparse.Namespace) -> int:
     edited = _edit(args)
     if edited is None:
         return 1
-    _, result = edited
+    rom, result = edited
     try:
-        patch = vi.make_ips(result.changes, checksum_words=result.data)
-    except ValueError as error:
+        patch = make_ips(rom, result.data)
+    except IpsError as error:
         print(f"refused: {error}", file=sys.stderr)
         return 1
     try:
