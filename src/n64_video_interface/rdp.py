@@ -85,6 +85,12 @@ REWRITTEN_BODY = (
     LOAD_HIGH_WORD,
 )
 INLINE_FAMILIES = {"F3DEX": F3DEX_ROUTINE, "Fast3D": FAST3D_ROUTINE}
+IMEM_SIZE = 0x1000
+HANDLER_WORDS = 3
+BRANCHES = frozenset({0x01, 0x04, 0x05, 0x06, 0x07, 0x14, 0x15, 0x16, 0x17})
+HALF = 0xFFFF
+SIGN = 0x8000
+WRAP = 0x10000
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +105,14 @@ class DitherSite:
     setom_jump: int
     cave: int
     cave_imem: int
+    rdp_jump: int
+
+
+@dataclass(frozen=True, slots=True)
+class HandlerSite:
+    math_jump: int
+    handler: int
+    handler_imem: int
     rdp_jump: int
 
 
@@ -130,12 +144,10 @@ def _nearest_before(candidates: list[int], limit: int) -> int | None:
 
 
 def _site(rom: bytes, math: int) -> DitherSite | None:
+    send = _tail_jump(rom, math)
+    if send is None:
+        return None
     tail = math + TAIL_AFTER_MATH
-    send = _word(rom, tail + 4)
-    if _word(rom, tail) != LOAD_OTHERMODE_0 or send >> 26 != OP_J:
-        return None
-    if _word(rom, tail + 8) != LOAD_OTHERMODE_1:
-        return None
     floor = max(0, math - SEARCH_BACK)
     window = range(floor, math, 4)
     rdp = _nearest_before(_aligned_hits(rom, RDP_SEND, floor, math), math)
@@ -165,6 +177,81 @@ def find_dither_sites(rom: bytes) -> tuple[DitherSite, ...]:
     return tuple(site for site in sites if site is not None)
 
 
+def _tail_jump(rom: bytes, math: int) -> int | None:
+    tail = math + TAIL_AFTER_MATH
+    if tail + 12 > len(rom) or _word(rom, tail) != LOAD_OTHERMODE_0:
+        return None
+    send = _word(rom, tail + 4)
+    if send >> 26 != OP_J or _word(rom, tail + 8) != LOAD_OTHERMODE_1:
+        return None
+    return send
+
+
+def _handlers(rom: bytes, send: int, floor: int, ceiling: int) -> list[int]:
+    return [
+        at
+        for at in range(floor, ceiling, 4)
+        if _word(rom, at) == STORE_OTHERMODE_0
+        and _word(rom, at + 4) == send
+        and _word(rom, at + 8) == STORE_OTHERMODE_1
+    ]
+
+
+def _targets(word: int, at: int, base: int, page: int) -> int | None:
+    if word >> 26 in (OP_J, OP_JAL):
+        return (
+            base + (((word & JUMP_TARGET) << 2) & IMEM_OFFSET)
+            if (word << 2) & IMEM_PAGE == page
+            else None
+        )
+    if word >> 26 in BRANCHES:
+        offset = word & HALF
+        return at + 4 + ((offset - WRAP) if offset & SIGN else offset) * 4
+    return None
+
+
+def _is_free(rom: bytes, at: int, base: int, page: int) -> bool:
+    if _word(rom, at) != NOP:
+        return False
+    span = range(base, min(len(rom) - 3, base + IMEM_SIZE), 4)
+    return all(_targets(_word(rom, word), word, base, page) != at for word in span)
+
+
+def _is_forced(rom: bytes, floor: int, ceiling: int) -> bool:
+    return any(
+        _word(rom, at) >> 26 == OP_J and _word(rom, at + 4) & UPPER_HALF == ORI_W0
+        for at in range(floor, ceiling, 4)
+    )
+
+
+def _handler_site(rom: bytes, math: int) -> HandlerSite | None:
+    send = _tail_jump(rom, math)
+    floor, ceiling = max(0, math - SEARCH_BACK), min(len(rom) - 16, math + SEARCH_BACK)
+    if send is None or _is_forced(rom, floor, ceiling):
+        return None
+    handlers = _handlers(rom, send, floor, ceiling)
+    target = (send & JUMP_TARGET) << 2
+    bases = [at - (target & IMEM_OFFSET) for at in _aligned_hits(rom, RDP_SEND, floor, ceiling)]
+    if len(handlers) != 1:
+        return None
+    handler = handlers[0]
+    fitting = [
+        b for b in bases if b <= min(handler, math) and max(handler, math) - b <= IMEM_OFFSET
+    ]
+    if len(fitting) != 1 or not _is_free(
+        rom, handler + HANDLER_WORDS * 4, fitting[0], target & IMEM_PAGE
+    ):
+        return None
+    handler_imem = ((handler - fitting[0]) & IMEM_OFFSET) | (target & IMEM_PAGE)
+    return HandlerSite(math + TAIL_AFTER_MATH + 4, handler, handler_imem, send)
+
+
+def find_handler_sites(rom: bytes) -> tuple[HandlerSite, ...]:
+    caved = {site.math_jump for site in find_dither_sites(rom)}
+    sites = (_handler_site(rom, math) for math in _aligned_hits(rom, OTHERMODE_MATH))
+    return tuple(site for site in sites if site is not None and site.math_jump not in caved)
+
+
 def find_inline_sites(rom: bytes) -> tuple[InlineSite, ...]:
     return tuple(
         InlineSite(at, family)
@@ -187,7 +274,7 @@ def _inline_rewrite(site: InlineSite, rom: bytes, bits: int) -> tuple[tuple[int,
 
 
 def count_microcodes(rom: bytes) -> int:
-    return len(find_dither_sites(rom)) + len(find_inline_sites(rom))
+    return len(find_dither_sites(rom)) + len(find_handler_sites(rom)) + len(find_inline_sites(rom))
 
 
 def _cave_writes(site: DitherSite, rom: bytes, bits: int) -> tuple[tuple[int, int, int], ...]:
@@ -201,11 +288,27 @@ def _cave_writes(site: DitherSite, rom: bytes, bits: int) -> tuple[tuple[int, in
     return tuple((offset, _word(rom, offset), value) for offset, value in writes)
 
 
+def _handler_writes(site: HandlerSite, rom: bytes, bits: int) -> tuple[tuple[int, int, int], ...]:
+    writes = (
+        (site.math_jump, (OP_J << 26) | (site.handler_imem >> 2)),
+        (site.handler, ORI_W0 | bits),
+        (site.handler + 4, STORE_OTHERMODE_0),
+        (site.handler + 8, site.rdp_jump),
+        (site.handler + 12, STORE_OTHERMODE_1),
+    )
+    return tuple((offset, _word(rom, offset), value) for offset, value in writes)
+
+
 def disable_dither(
     rom: bytes, bits: int = DITHER_BITS
 ) -> tuple[bytes, tuple[tuple[int, int, int], ...]]:
     changes = (
         *(change for site in find_dither_sites(rom) for change in _cave_writes(site, rom, bits)),
+        *(
+            change
+            for site in find_handler_sites(rom)
+            for change in _handler_writes(site, rom, bits)
+        ),
         *(change for site in find_inline_sites(rom) for change in _inline_rewrite(site, rom, bits)),
     )
     out = bytearray(rom)

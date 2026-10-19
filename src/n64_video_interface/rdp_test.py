@@ -347,3 +347,116 @@ class TestTheFast3dFamily:
             0x090004EA,
             0x8FB8000C,
         ]
+
+
+PADDING_IMEM = SETOM_IMEM + 12
+NO_CAVE = (0,) * len(DMA_IO_HANDLER)
+
+
+def s2dex_rom(**extra):
+    blob = bytearray(microcode_rom(cave=NO_CAVE))
+    for imem, value in extra.items():
+        place(blob, int(imem.removeprefix("at_"), 16), (value,))
+    return bytes(blob)
+
+
+def branch_to(imem, target):
+    return (0x04 << 26) | (((target - imem - 4) >> 2) & 0xFFFF)
+
+
+class TestTheHandlerFallback:
+    def test_a_microcode_without_a_cave_uses_its_own_setothermode_handler(self):
+        # Arrange
+        rom = s2dex_rom()
+
+        # Act
+        sites = rdp.find_handler_sites(rom)
+
+        # Assert
+        assert [(s.math_jump, s.handler, s.handler_imem, s.rdp_jump) for s in sites] == [
+            (rom_at(MATH_IMEM) + 40, rom_at(SETOM_IMEM), SETOM_IMEM, jump(RDP_HANDLER_IMEM))
+        ]
+
+    def test_a_microcode_with_a_cave_is_left_to_the_cave(self):
+        # Arrange
+        rom = microcode_rom()
+
+        # Act
+        sites = rdp.find_handler_sites(rom)
+
+        # Assert
+        assert sites == ()
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {f"at_{PADDING_IMEM:x}": 0x24020001},
+            {f"at_{CAVE_IMEM:x}": jump(PADDING_IMEM)},
+            {f"at_{CAVE_IMEM:x}": branch_to(CAVE_IMEM, PADDING_IMEM)},
+            {
+                f"at_{SETOM_IMEM - 0x40:x}": 0xAC1900C8,
+                f"at_{SETOM_IMEM - 0x3C:x}": jump(RDP_HANDLER_IMEM),
+                f"at_{SETOM_IMEM - 0x38:x}": 0xAC1800CC,
+            },
+            {f"at_{RDP_HANDLER_IMEM:x}": 0},
+        ],
+        ids=["padding in use", "jumped to", "branched to", "two handlers", "no send"],
+    )
+    def test_a_handler_that_cannot_be_shifted_safely_is_not_used(self, extra):
+        # Arrange
+        rom = s2dex_rom(**extra)
+
+        # Act
+        sites = rdp.find_handler_sites(rom)
+
+        # Assert
+        assert sites == ()
+
+    def test_a_jump_into_another_page_does_not_count_as_a_jump_to_the_padding(self):
+        # Arrange
+        rom = s2dex_rom(**{f"at_{CAVE_IMEM:x}": jump(0x2000 | (PADDING_IMEM & 0xFFF))})
+
+        # Act
+        sites = rdp.find_handler_sites(rom)
+
+        # Assert
+        assert len(sites) == 1
+
+    def test_a_routine_cut_off_by_the_end_of_the_data_is_not_a_site(self):
+        # Arrange
+        rom = s2dex_rom()[: rom_at(MATH_IMEM) + 40]
+
+        # Act
+        sites = rdp.find_handler_sites(rom)
+
+        # Assert
+        assert sites == ()
+
+    def test_the_tail_and_the_handler_are_rewritten_to_force_the_bits(self):
+        # Arrange
+        rom = s2dex_rom()
+
+        # Act
+        patched, changes = rdp.disable_dither(rom)
+
+        # Assert
+        handler = rom_at(SETOM_IMEM)
+        assert (
+            word(patched, rom_at(MATH_IMEM) + 40),
+            [word(patched, handler + i * 4) for i in range(4)],
+            len(changes),
+        ) == (
+            jump(SETOM_IMEM),
+            [0x373900F0, 0xAC1900C8, jump(RDP_HANDLER_IMEM), 0xAC1800CC],
+            5,
+        )
+
+    def test_a_patched_handler_is_not_patched_again(self):
+        # Arrange
+        once, _ = rdp.disable_dither(s2dex_rom())
+
+        # Act
+        twice, changes = rdp.disable_dither(once)
+
+        # Assert
+        assert (twice, changes) == (once, ())
