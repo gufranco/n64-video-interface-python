@@ -533,10 +533,15 @@ class PatchResult:
 
 
 NO_CHANGE_NEEDED = "every mode already has the requested settings"
+NO_TABLE = "no video mode table could be proven present"
 
 
-def _describe(modes: int, entries: int, requests: tuple[SwitchRequest, ...]) -> str:
+def _describe(
+    modes: int, entries: int, requests: tuple[SwitchRequest, ...], *, table_missing: bool
+) -> str:
     parts = [f"{modes} of {entries} mode entries changed"] if entries else []
+    if table_missing:
+        parts.append(f"{NO_TABLE}, so anti-aliasing and the table settings are unchanged")
     for switch in SWITCHES:
         count = sum(1 for request in requests if request.switch == switch)
         if count:
@@ -590,8 +595,6 @@ def _safe_patch_z64(
 
     entries = find_mode_tables(rom)
     wants_table = any(v is not None for v in requested.values())
-    if wants_table and not entries:
-        return PatchResult(False, "no video mode table could be proven present")
 
     switched_off = (
         ("dedither", dither_filter),
@@ -605,6 +608,8 @@ def _safe_patch_z64(
         if setting is False
         for request in find_switch_requests(rom, switch)
     )
+    if wants_table and not entries and not requests:
+        return PatchResult(False, NO_TABLE)
     if dither_filter is False and not requests and not wants_table:
         return PatchResult(
             False, "this ROM has no way to switch the dedither filter on, so it is already off"
@@ -658,7 +663,9 @@ def _safe_patch_z64(
 
     return PatchResult(
         applied=True,
-        reason=_describe(modes_changed, len(entries), requests),
+        reason=_describe(
+            modes_changed, len(entries), requests, table_missing=wants_table and not entries
+        ),
         data=sealed,
         modes_changed=modes_changed,
         changes=tuple(changes),

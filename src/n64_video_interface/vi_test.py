@@ -809,6 +809,25 @@ class TestRuntimeSwitches:
         assert struct.unpack_from(">I", result.data, guards[name])[0] & 0xFFFF == 0
         assert result.reason == f"1 of 1 mode entries changed, 1 {name} request neutralised"
 
+    def test_a_rom_with_no_table_still_gets_its_runtime_switches_neutralised(self):
+        # Arrange
+        from n64_video_interface.conftest import make_rom
+
+        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x4000))
+        routine, _ = routine_with_switches(["dedither", "divot"])
+        data[0x3000 : 0x3000 + len(routine)] = routine
+        rom = vi.reseal(bytes(data), "6102")
+
+        # Act
+        result = vi.safe_patch(rom, antialiasing=False, divot=False, dither_filter=False)
+
+        # Assert
+        assert (result.applied, result.reason) == (
+            True,
+            "no video mode table could be proven present, so anti-aliasing and the table "
+            "settings are unchanged, 1 dedither request neutralised, 1 divot request neutralised",
+        )
+
     def test_anti_aliasing_alone_leaves_every_switch_in_place(self):
         # Arrange
         rom, guards = rom_with_table_and_switches(list(SWITCH_BLOCKS))
