@@ -20,6 +20,8 @@ from . import vi
 from .header import parse as parse_header
 from .version import VERSION
 
+OUTPUT_IS_INPUT = "refused: the output names the ROM being read, which would destroy it"
+
 SWITCHES = (
     ("no-aa", "antialiasing", "disable anti-aliasing"),
     ("no-divot", "divot", "disable the divot filter"),
@@ -97,6 +99,9 @@ def _edit(args: argparse.Namespace) -> tuple[bytes, vi.PatchResult] | None:
     requests = _requested(args)
     if not requests:
         print("name at least one setting to turn off, such as --no-aa", file=sys.stderr)
+        return None
+    if Path(args.output).resolve() == Path(args.rom).resolve():
+        print(OUTPUT_IS_INPUT, file=sys.stderr)
         return None
     rom = _read(args.rom)
     if rom is None:

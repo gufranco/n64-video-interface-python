@@ -104,6 +104,24 @@ class TestPatch:
         assert not out.exists()
 
 
+class TestOutputThatIsTheInput:
+    @pytest.mark.parametrize("verb", ["patch", "ips"])
+    def test_an_output_naming_the_input_is_refused_and_the_rom_kept(self, verb, sample, capsys):
+        # Arrange
+        before = sample.read_bytes()
+        same = sample.parent / "." / sample.name
+
+        # Act
+        code = cli.main([verb, str(sample), "--no-aa", "--output", str(same)])
+
+        # Assert
+        assert (code, sample.read_bytes(), capsys.readouterr().err) == (
+            1,
+            before,
+            "refused: the output names the ROM being read, which would destroy it\n",
+        )
+
+
 class TestIps:
     def test_it_writes_a_patch(self, sample, tmp_path):
         out = tmp_path / "sharp.ips"
