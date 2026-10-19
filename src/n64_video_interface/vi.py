@@ -54,7 +54,7 @@ AA_NAMES = {
 
 PIXEL_TYPES = {0: "blank", 1: "reserved", 2: "16-bit", 3: "32-bit"}
 
-VSYNC_BY_STANDARD = {525: "NTSC", 625: "PAL"}
+VSYNC_BY_STANDARD = {524: "NTSC", 525: "NTSC", 624: "PAL", 625: "PAL"}
 PLAUSIBLE_WIDTHS = (256, 320, 384, 512, 576, 640)
 
 ADDIU_ZERO = 0x24000000
@@ -194,10 +194,10 @@ def find_mode_tables(rom: bytes) -> tuple[ModeEntry, ...]:
     A ctrl value alone is far too common to key on. Requiring a plausible width
     and a real video standard immediately after it is what makes the match safe.
 
-    The search is anchored on vSync rather than on ctrl. vSync takes one of only
-    two values in the whole address space, so scanning for it in C through
-    bytes.find and then checking backwards is far cheaper than decoding every
-    word in a 64 MiB ROM. The acceptance test is identical either way.
+    The search is anchored on vSync rather than on ctrl. vSync takes one of four
+    values, progressive or interlaced for each standard, so scanning for it in C
+    through bytes.find and then checking backwards is far cheaper than decoding
+    every word in a 64 MiB ROM. The acceptance test is identical either way.
     """
     found: list[ModeEntry] = []
     for vsync, standard in VSYNC_BY_STANDARD.items():

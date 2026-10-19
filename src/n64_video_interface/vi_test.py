@@ -119,6 +119,19 @@ class TestFindModeTables:
         assert ntsc[0].standard == "NTSC"
         assert pal[0].standard == "PAL"
 
+    def test_finds_interlaced_entries_of_both_standards(self):
+        # Arrange
+        rom = bytes(16) + mode_entry(ctrl=0x0000324E, vsync=0x20C) + mode_entry(vsync=0x270)
+
+        # Act
+        found = vi.find_mode_tables(rom)
+
+        # Assert
+        assert [(entry.vsync, entry.standard) for entry in found] == [
+            (0x20C, "NTSC"),
+            (0x270, "PAL"),
+        ]
+
     def test_records_the_declared_width(self):
         found = vi.find_mode_tables(bytes(16) + mode_entry(width=640))
 
