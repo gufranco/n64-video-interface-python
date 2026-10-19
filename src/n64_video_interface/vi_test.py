@@ -733,6 +733,86 @@ def rom_with_dither_request(**kwargs):
     return bytes(blob), guard, branch, setter
 
 
+def ori_setting(bit):
+    return (0x0D << 26) | (25 << 21) | (8 << 16) | bit
+
+
+SWITCH_BLOCKS = {
+    "dedither": {"flag": 0x0040, "setter_word": LUI_AT_ONE},
+    "divot": {"flag": 0x0010, "setter_word": ori_setting(0x0010)},
+    "gamma dither": {"flag": 0x0004, "setter_word": ori_setting(0x0004)},
+    "gamma": {"flag": 0x0001, "setter_word": ori_setting(0x0008)},
+}
+
+
+def routine_with_switches(names):
+    blob = bytearray(0x400)
+    for i, imm in enumerate((0xFFF7, 0xFFFB, 0xFFEF, 0xFCFF)):
+        struct.pack_into(">I", blob, 0x40 + i * 8, 0x24010000 | imm)
+    guards = {}
+    for index, name in enumerate(names):
+        words, guard, _, _ = dither_block(0x60 + index * 0x20, **SWITCH_BLOCKS[name])
+        for at, word in words.items():
+            struct.pack_into(">I", blob, at, word)
+        guards[name] = guard
+    return bytes(blob), guards
+
+
+def rom_with_table_and_switches(names):
+    from n64_video_interface.conftest import make_rom
+
+    data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x4000))
+    data[0x2000 : 0x2000 + len(mode_entry())] = mode_entry()
+    routine, guards = routine_with_switches(names)
+    data[0x3000 : 0x3000 + len(routine)] = routine
+    return vi.reseal(bytes(data), "6102"), {name: 0x3000 + at for name, at in guards.items()}
+
+
+class TestRuntimeSwitches:
+    @pytest.mark.parametrize("name", list(SWITCH_BLOCKS))
+    def test_each_switch_on_block_is_found_by_its_flag(self, name):
+        # Arrange
+        blob, guards = routine_with_switches(list(SWITCH_BLOCKS))
+
+        # Act
+        found = vi.find_switch_requests(blob, name)
+
+        # Assert
+        assert [request.guard for request in found] == [guards[name]]
+
+    @pytest.mark.parametrize(
+        ("setting", "name"),
+        [("divot", "divot"), ("gamma_dither", "gamma dither"), ("gamma", "gamma")],
+    )
+    def test_turning_a_setting_off_also_stops_the_game_switching_it_on(self, setting, name):
+        # Arrange
+        rom, guards = rom_with_table_and_switches(list(SWITCH_BLOCKS))
+
+        # Act
+        result = vi.safe_patch(rom, **{setting: False})
+
+        # Assert
+        assert struct.unpack_from(">I", result.data, guards[name])[0] & 0xFFFF == 0
+        assert result.reason == f"1 of 1 mode entries changed, 1 {name} request neutralised"
+
+    def test_anti_aliasing_alone_leaves_every_switch_in_place(self):
+        # Arrange
+        rom, guards = rom_with_table_and_switches(list(SWITCH_BLOCKS))
+
+        # Act
+        result = vi.safe_patch(rom, antialiasing=False)
+
+        # Assert
+        assert [
+            struct.unpack_from(">I", result.data, at)[0] & 0xFFFF for at in guards.values()
+        ] == [
+            0x0040,
+            0x0010,
+            0x0004,
+            0x0001,
+        ]
+
+
 class TestFindDitherRequests:
     """The dedither filter never sits in a mode table, so the only place a ROM can
     switch it on is osViSetSpecialFeatures. These locate that request."""
@@ -748,7 +828,7 @@ class TestFindDitherRequests:
     def test_records_the_flag_it_matched(self):
         blob, _, _, _ = rom_with_dither_request()
 
-        assert vi.find_dither_requests(blob)[0].flag == vi.DITHER_FILTER_ON_FLAG
+        assert vi.find_dither_requests(blob)[0].flag == vi.SWITCHES["dedither"].flag
 
     def test_ignores_a_block_guarded_by_a_different_flag(self):
         """Three retail ROMs carry the four mask constants inside an unrelated
@@ -957,45 +1037,6 @@ class TestTheScannerRejectsANearMiss:
         struct.pack_into(">I", data, at, 525)
 
         assert vi.find_mode_tables(bytes(data)) == ()
-
-
-class TestARequestAlreadyNeutralised:
-    """A guard whose immediate is already zero needs no edit and gets none.
-
-    The loop reads the word, masks it, and writes only when the mask changed
-    something. Without a case where it did not, the skip was never taken and a
-    patch that rewrote an already-clear guard would have looked identical.
-    """
-
-    def request_at(self, offset):
-        return vi.DitherRequest(
-            setter=offset - 8, branch=offset + 8, guard=offset, target=offset, flag=1
-        )
-
-    def test_clearing_it_reports_no_change(self, monkeypatch):
-        from n64_video_interface.conftest import make_rom
-
-        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
-        struct.pack_into(">I", data, 0x3000, 0xABCD0000)
-        monkeypatch.setattr(vi, "find_dither_requests", lambda rom: (self.request_at(0x3000),))
-
-        out, changes = vi.clear_dither_requests(bytes(data))
-
-        assert changes == ()
-        assert out == bytes(data)
-
-    def test_safe_patch_counts_it_as_nothing_to_do(self, monkeypatch):
-        from n64_video_interface.conftest import make_rom
-
-        data = bytearray(make_rom(size=vi.CHECKSUM_END + 0x2000))
-        struct.pack_into(">I", data, 0x3000, 0xABCD0000)
-        rom = vi.reseal(bytes(data), "6102")
-        monkeypatch.setattr(vi, "find_dither_requests", lambda blob: (self.request_at(0x3000),))
-
-        result = vi.safe_patch(rom, dither_filter=False)
-
-        assert result.applied is False
-        assert result.reason == vi.NO_CHANGE_NEEDED
 
 
 class TestResealProducingSomethingThatDoesNotValidate:

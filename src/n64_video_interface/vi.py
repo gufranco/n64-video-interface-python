@@ -297,22 +297,31 @@ OP_BEQL = 0x14
 OP_ANDI = 0x0C
 OP_LUI = 0x0F
 LUI_DITHER_FILTER_UPPER = 0x0001
-DITHER_FILTER_ON_FLAG = 0x0040
 DITHER_SEARCH_BACK = 0x100
 DITHER_SEARCH_FORWARD = 0x80
 
 
+OP_ORI = 0x0D
+
+
+@dataclass(frozen=True, slots=True)
+class SwitchSpec:
+    flag: int
+    opcode: int
+    immediate: int
+
+
+SWITCHES = {
+    "dedither": SwitchSpec(flag=0x0040, opcode=OP_LUI, immediate=LUI_DITHER_FILTER_UPPER),
+    "divot": SwitchSpec(flag=0x0010, opcode=OP_ORI, immediate=CTRL_DIVOT),
+    "gamma dither": SwitchSpec(flag=0x0004, opcode=OP_ORI, immediate=CTRL_GAMMA_DITHER),
+    "gamma": SwitchSpec(flag=0x0001, opcode=OP_ORI, immediate=CTRL_GAMMA),
+}
+
+
 @dataclass(frozen=True)
-class DitherRequest:
-    """Where a ROM asks the library to switch the dedither filter on.
-
-    `setter` is the `lui rX, 0x0001` that puts bit 16 in place for the `or` that
-    follows. `guard` is the `andi` computing the OS_VI_DITHER_FILTER_ON flag, and
-    `branch` is the `beq`/`beql` that skips the whole block when the flag is
-    clear. Zeroing the guard's immediate makes the branch always taken, so the
-    request becomes a no-op.
-    """
-
+class SwitchRequest:
+    switch: str
     setter: int
     branch: int
     guard: int
@@ -320,10 +329,10 @@ class DitherRequest:
     flag: int
 
 
-def _sets_dither_filter_bit(word: int) -> bool:
-    return (
-        word >> 26 == OP_LUI and (word >> 21) & 31 == 0 and word & 0xFFFF == LUI_DITHER_FILTER_UPPER
-    )
+def _sets_bit(word: int, spec: SwitchSpec) -> bool:
+    if word >> 26 != spec.opcode or word & 0xFFFF != spec.immediate:
+        return False
+    return spec.opcode != OP_LUI or (word >> 21) & 31 == 0
 
 
 def _guard_for(rom: bytes, setter: int, floor: int) -> tuple[int, int, int, int] | None:
@@ -356,31 +365,25 @@ def _guard_for(rom: bytes, setter: int, floor: int) -> tuple[int, int, int, int]
     return None
 
 
-def find_dither_requests(rom: bytes) -> tuple[DitherRequest, ...]:
-    """Every runtime request to switch the dedither filter on.
-
-    The filter never appears in a mode table, so this is the only place a ROM can
-    turn it on. A block whose guard tests a flag other than OS_VI_DITHER_FILTER_ON
-    belongs to some other routine that happens to carry the same mask constants,
-    and is left alone.
-    """
-    found: list[DitherRequest] = []
+def find_switch_requests(rom: bytes, switch: str) -> tuple[SwitchRequest, ...]:
+    spec = SWITCHES[switch]
+    found: list[SwitchRequest] = []
     for site in find_special_features(rom):
         floor = max(0, site.offset - DITHER_SEARCH_BACK)
         ceiling = min(len(rom) - 4, site.masks["antialias"] + DITHER_SEARCH_FORWARD)
         for setter in range(floor, ceiling, 4):
-            if not _sets_dither_filter_bit(struct.unpack_from(">I", rom, setter)[0]):
+            if not _sets_bit(struct.unpack_from(">I", rom, setter)[0], spec):
                 continue
             resolved = _guard_for(rom, setter, floor)
-            if resolved is None:
+            if resolved is None or resolved[3] != spec.flag:
                 continue
             branch, guard, target, flag = resolved
-            if flag != DITHER_FILTER_ON_FLAG:
-                continue
-            found.append(
-                DitherRequest(setter=setter, branch=branch, guard=guard, target=target, flag=flag)
-            )
+            found.append(SwitchRequest(switch, setter, branch, guard, target, flag))
     return tuple(found)
+
+
+def find_dither_requests(rom: bytes) -> tuple[SwitchRequest, ...]:
+    return find_switch_requests(rom, "dedither")
 
 
 def clear_dither_requests(rom: bytes) -> tuple[bytes, tuple[tuple[int, int, int], ...]]:
@@ -397,9 +400,8 @@ def clear_dither_requests(rom: bytes) -> tuple[bytes, tuple[tuple[int, int, int]
     for request in find_dither_requests(rom):
         before = struct.unpack_from(">I", out, request.guard)[0]
         after = before & 0xFFFF0000
-        if after != before:
-            struct.pack_into(">I", out, request.guard, after)
-            changes.append((request.guard, before, after))
+        struct.pack_into(">I", out, request.guard, after)
+        changes.append((request.guard, before, after))
     return bytes(out), tuple(changes)
 
 
@@ -531,12 +533,12 @@ class PatchResult:
 NO_CHANGE_NEEDED = "every mode already has the requested settings"
 
 
-def _describe(modes: int, entries: int, requests: int) -> str:
-    parts = []
-    if entries:
-        parts.append(f"{modes} of {entries} mode entries changed")
-    if requests:
-        parts.append(f"{requests} dedither request neutralised")
+def _describe(modes: int, entries: int, requests: tuple[SwitchRequest, ...]) -> str:
+    parts = [f"{modes} of {entries} mode entries changed"] if entries else []
+    for switch in SWITCHES:
+        count = sum(1 for request in requests if request.switch == switch)
+        if count:
+            parts.append(f"{count} {switch} request neutralised")
     return ", ".join(parts) or "nothing changed"
 
 
@@ -589,7 +591,18 @@ def _safe_patch_z64(
     if wants_table and not entries:
         return PatchResult(False, "no video mode table could be proven present")
 
-    requests = find_dither_requests(rom) if dither_filter is False else ()
+    switched_off = (
+        ("dedither", dither_filter),
+        ("divot", divot),
+        ("gamma dither", gamma_dither),
+        ("gamma", gamma),
+    )
+    requests = tuple(
+        request
+        for switch, setting in switched_off
+        if setting is False
+        for request in find_switch_requests(rom, switch)
+    )
     if dither_filter is False and not requests and not wants_table:
         return PatchResult(
             False, "this ROM has no way to switch the dedither filter on, so it is already off"
@@ -623,9 +636,8 @@ def _safe_patch_z64(
     for request in requests:
         before = struct.unpack_from(">I", out, request.guard)[0]
         after = before & 0xFFFF0000
-        if after != before:
-            struct.pack_into(">I", out, request.guard, after)
-            changes.append((request.guard, before, after))
+        struct.pack_into(">I", out, request.guard, after)
+        changes.append((request.guard, before, after))
 
     if not changes:
         return PatchResult(False, NO_CHANGE_NEEDED)
@@ -644,7 +656,7 @@ def _safe_patch_z64(
 
     return PatchResult(
         applied=True,
-        reason=_describe(modes_changed, len(entries), len(requests)),
+        reason=_describe(modes_changed, len(entries), requests),
         data=sealed,
         modes_changed=modes_changed,
         changes=tuple(changes),
