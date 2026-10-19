@@ -28,14 +28,19 @@ def detect(data: bytes) -> ByteOrder | None:
     return None
 
 
+UNIT = {ByteOrder.Z64: 1, ByteOrder.V64: 2, ByteOrder.N64: HEAD_BYTES}
+
+
 def swap(data: bytes, order: ByteOrder) -> bytes:
+    whole = len(data) - len(data) % UNIT[order]
+    body, tail = data[:whole], data[whole:]
     if order is ByteOrder.V64:
-        swapped = bytearray(data)
-        swapped[0::2], swapped[1::2] = data[1::2], data[0::2]
-        return bytes(swapped)
+        swapped = bytearray(body)
+        swapped[0::2], swapped[1::2] = body[1::2], body[0::2]
+        return bytes(swapped) + tail
     if order is ByteOrder.N64:
-        swapped = bytearray(data)
+        swapped = bytearray(body)
         for lane in range(HEAD_BYTES):
-            swapped[lane::HEAD_BYTES] = data[HEAD_BYTES - 1 - lane :: HEAD_BYTES]
-        return bytes(swapped)
+            swapped[lane::HEAD_BYTES] = body[HEAD_BYTES - 1 - lane :: HEAD_BYTES]
+        return bytes(swapped) + tail
     return data

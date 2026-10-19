@@ -69,6 +69,23 @@ class TestSwap:
         # Assert
         assert twice == stored
 
+    @pytest.mark.parametrize(
+        ("order", "stored", "expected"),
+        [
+            (ByteOrder.V64, bytes.fromhex("3780401207"), bytes.fromhex("8037124007")),
+            (ByteOrder.N64, bytes.fromhex("40123780aabbcc"), bytes.fromhex("80371240aabbcc")),
+        ],
+    )
+    def test_a_partial_unit_at_the_end_is_kept_as_it_is(self, order, stored, expected):
+        # Arrange
+        data = stored
+
+        # Act
+        big = swap(data, order)
+
+        # Assert
+        assert big == expected
+
     def test_big_endian_data_is_returned_unchanged(self):
         # Arrange
         stored = Z64_WORDS
