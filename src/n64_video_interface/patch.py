@@ -49,7 +49,7 @@ def _request_refusal(settings: Settings) -> str | None:
     return None
 
 
-def _region_refusal(edits: Sequence[RegionEdit], settings: Settings) -> str | None:
+def _nothing_reason(edits: Sequence[RegionEdit], settings: Settings) -> str:
     entries = sum(edit.entries for edit in edits)
     requests = sum(len(edit.requests) for edit in edits)
     if settings.rdp_bits and not sum(edit.microcodes for edit in edits):
@@ -58,7 +58,7 @@ def _region_refusal(edits: Sequence[RegionEdit], settings: Settings) -> str | No
         return NO_TABLE
     if not settings.wants_table and not requests and not settings.rdp_bits:
         return ALREADY_OFF
-    return None
+    return NO_CHANGE_NEEDED
 
 
 def _reason(edits: Sequence[RegionEdit], settings: Settings, packed: rarezip.Packed | str) -> str:
@@ -75,14 +75,11 @@ def _patch_big_endian(rom: bytes, settings: Settings) -> PatchResult:
     direct = edit_region(rom, settings)
     packed = rarezip.edit_groups(direct.data, settings)
     edits = (direct, *packed.edits) if isinstance(packed, rarezip.Packed) else (direct,)
-    refusal = _region_refusal(edits, settings)
-    if refusal is not None:
-        return PatchResult(False, refusal)
+    if not any(edit.changes for edit in edits):
+        return PatchResult(False, _nothing_reason(edits, settings))
     valid, cic = verify(rom)
     if not valid or cic is None:
         return PatchResult(False, CHECKSUM_UNKNOWN)
-    if not any(edit.changes for edit in edits):
-        return PatchResult(False, NO_CHANGE_NEEDED)
     data = packed.data if isinstance(packed, rarezip.Packed) else direct.data
     modes = sum(edit.modes_changed for edit in edits)
     reason = _reason(edits, settings, packed)

@@ -14,6 +14,7 @@ CHECKSUM_UNKNOWN = (
     "the existing checksum does not validate, so the boot chip is unknown "
     "and the result could not be resealed correctly"
 )
+NO_MICROCODE_NOTE = "no supported microcode was found, so the RDP dither is unchanged"
 TABLE_SETTINGS = ("antialiasing", "divot", "gamma_dither", "gamma")
 SWITCH_SETTINGS = (
     ("dedither", "dither_filter"),
@@ -125,9 +126,10 @@ def describe(edits: Sequence[RegionEdit], settings: Settings) -> str:
     for switch in SWITCHES:
         count = sum(1 for edit in edits for request in edit.requests if request.switch == switch)
         parts.extend([f"{count} {switch} request neutralised"] if count else [])
-    if settings.rdp_bits:
-        microcodes = sum(edit.microcodes for edit in edits)
+    microcodes = sum(edit.microcodes for edit in edits)
+    if settings.rdp_bits and microcodes:
         noun = "microcode" if microcodes == 1 else "microcodes"
         label = RDP_DITHER_LABELS[settings.rdp_bits]
         parts.append(f"{label} dither forced off in {microcodes} {noun}")
+    parts.extend([NO_MICROCODE_NOTE] if settings.rdp_bits and not microcodes else [])
     return ", ".join(parts)

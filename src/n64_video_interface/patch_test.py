@@ -5,6 +5,7 @@ import pytest
 from n64_video_interface import checksum
 from n64_video_interface.byteorder import ByteOrder, swap
 from n64_video_interface.conftest import SEALABLE_SIZE, make_rom, mode_entry, sealable_rom
+from n64_video_interface.edits import NO_MICROCODE_NOTE
 from n64_video_interface.patch import (
     ALREADY_OFF,
     CHECKSUM_UNKNOWN,
@@ -91,6 +92,22 @@ class TestRefusals:
 
         # Assert
         assert (result.applied, result.reason) == (False, CHECKSUM_UNKNOWN)
+
+
+class TestPartialRequests:
+    def test_the_vi_is_patched_when_only_the_rdp_dither_cannot_be(self):
+        # Arrange
+        rom, _ = sealable_rom()
+
+        # Act
+        result = safe_patch(rom, antialiasing=False, rdp_color_dither=False)
+
+        # Assert
+        assert (result.applied, result.reason, checksum.verify(result.data)) == (
+            True,
+            f"1 of 1 mode entries changed, {NO_MICROCODE_NOTE}",
+            (True, "6102"),
+        )
 
 
 class TestTheTable:
