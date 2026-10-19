@@ -15,6 +15,15 @@ and the exact tool versions in `uv.lock`, so a local run and CI use the same one
 The suite passes on a clean checkout with no ROMs and no network. That is
 enforced in CI: anybody can work on this without owning a collection.
 
+A second tier runs against real dumps. [`artifacts.manifest.json`](artifacts.manifest.json)
+names each one by SHA-256, and `N64VI_ROM_DIRS` points at the folders holding
+them, as in [`.env.example`](.env.example). Dumps that are not present are
+skipped:
+
+```bash
+N64VI_ROM_DIRS="/path/to/dumps" uv run pytest src/n64_video_interface/corpus_test.py
+```
+
 ## The gates
 
 | Gate | Command |

@@ -62,6 +62,7 @@ exclude = ["**/*.z64", "**/*.v64", "**/*.n64", "**/*.ips", "**/*.aps"]
 # under test with an empty one.
 testpaths = ["src"]
 addopts = "-q --strict-markers --strict-config"
+markers = ["artifacts: needs the dumps listed in artifacts.manifest.json, found through N64VI_ROM_DIRS"]
 # So `pytest` works from a clean checkout with no environment set up.
 pythonpath = ["src"]
 
