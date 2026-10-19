@@ -27,6 +27,7 @@ mode table signature was verified against retail ROMs before being relied on.
 
 from __future__ import annotations
 
+import bisect
 import struct
 from dataclasses import dataclass, replace
 
@@ -59,9 +60,6 @@ PIXEL_TYPES = {0: "blank", 1: "reserved", 2: "16-bit", 3: "32-bit"}
 VSYNC_BY_STANDARD = {524: "NTSC", 525: "NTSC", 624: "PAL", 625: "PAL"}
 PLAUSIBLE_WIDTHS = (256, 320, 384, 512, 576, 640, 1280)
 
-ADDIU_ZERO = 0x24000000
-ADDIU_OPCODE_MASK = 0xFC000000
-ADDIU_OPCODE = 0x24000000
 
 MASK_CONSTANTS = (
     ("gamma", 0xFFF7),
@@ -70,6 +68,8 @@ MASK_CONSTANTS = (
     ("antialias", 0xFCFF),
 )
 MASK_SEARCH_WINDOW = 256
+OP_ADDIU = 0x09
+IMMEDIATE_OFFSET = 2
 
 MODE_ENTRY_STRIDE = 4
 
@@ -248,6 +248,25 @@ class SpecialFeaturesSite:
     masks: dict[str, int]
 
 
+def _addiu_offsets(rom: bytes, imm: int) -> list[int]:
+    needle = imm.to_bytes(2, "big")
+    offsets: list[int] = []
+    at = rom.find(needle, IMMEDIATE_OFFSET)
+    while at >= 0:
+        word = at - IMMEDIATE_OFFSET
+        if word % 4 == 0 and rom[word] >> 2 == OP_ADDIU:
+            offsets.append(word)
+        at = rom.find(needle, at + 1)
+    return offsets
+
+
+def _next_within(offsets: list[int], after: int, before: int) -> int | None:
+    index = bisect.bisect_right(offsets, after)
+    if index < len(offsets) and offsets[index] < before:
+        return offsets[index]
+    return None
+
+
 def find_special_features(rom: bytes) -> tuple[SpecialFeaturesSite, ...]:
     """Locate osViSetSpecialFeatures by the four AND masks it applies in order.
 
@@ -256,21 +275,14 @@ def find_special_features(rom: bytes) -> tuple[SpecialFeaturesSite, ...]:
     and close together is a strong signature for the library routine, and it is
     how the established tooling finds it too.
     """
+    found = {imm: _addiu_offsets(rom, imm) for _, imm in MASK_CONSTANTS}
     first_name, first_imm = MASK_CONSTANTS[0]
     sites: list[SpecialFeaturesSite] = []
-    for offset in range(0, max(0, len(rom) - 4), 4):
-        word = struct.unpack_from(">I", rom, offset)[0]
-        if word & ADDIU_OPCODE_MASK != ADDIU_OPCODE or word & 0xFFFF != first_imm:
-            continue
+    for offset in found[first_imm]:
         masks = {first_name: offset}
         cursor = offset
         for name, imm in MASK_CONSTANTS[1:]:
-            hit = None
-            for probe in range(cursor + 4, min(len(rom) - 4, cursor + MASK_SEARCH_WINDOW), 4):
-                candidate = struct.unpack_from(">I", rom, probe)[0]
-                if candidate & ADDIU_OPCODE_MASK == ADDIU_OPCODE and candidate & 0xFFFF == imm:
-                    hit = probe
-                    break
+            hit = _next_within(found[imm], cursor, min(len(rom) - 3, cursor + MASK_SEARCH_WINDOW))
             if hit is None:
                 break
             masks[name] = hit

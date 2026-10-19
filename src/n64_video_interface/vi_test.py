@@ -261,6 +261,78 @@ class TestFindSpecialFeatures:
         assert vi.find_special_features(bytes(4096)) == ()
 
 
+def reference_special_features(rom):
+    def is_mask(offset, imm):
+        word = struct.unpack_from(">I", rom, offset)[0]
+        return word >> 26 == 0x09 and word & 0xFFFF == imm
+
+    sites = []
+    for offset in range(0, len(rom) - 3, 4):
+        if not is_mask(offset, 0xFFF7):
+            continue
+        masks = {"gamma": offset}
+        for name, imm in (("gamma_dither", 0xFFFB), ("divot", 0xFFEF), ("antialias", 0xFCFF)):
+            last = masks[list(masks)[-1]]
+            window = range(last + 4, min(len(rom) - 3, last + vi.MASK_SEARCH_WINDOW), 4)
+            hit = next((probe for probe in window if is_mask(probe, imm)), None)
+            if hit is None:
+                break
+            masks[name] = hit
+        if len(masks) == 4:
+            sites.append((offset, masks))
+    return sites
+
+
+def planted_routine(at, gap=8):
+    blob = bytearray(at + 4 * gap + 4)
+    for index, imm in enumerate((0xFFF7, 0xFFFB, 0xFFEF, 0xFCFF)):
+        struct.pack_into(">I", blob, at + index * gap, 0x24010000 | imm)
+    return blob
+
+
+class TestSpecialFeaturesScannerEquivalence:
+    def found(self, rom):
+        return [(site.offset, site.masks) for site in vi.find_special_features(rom)]
+
+    def test_a_routine_ending_on_the_last_word_is_found(self):
+        # Arrange
+        blob = planted_routine(0x40)
+        rom = bytes(blob[: 0x40 + 3 * 8 + 4])
+
+        # Act
+        found = self.found(rom)
+
+        # Assert
+        assert found == [
+            (0x40, {"gamma": 0x40, "gamma_dither": 0x48, "divot": 0x50, "antialias": 0x58})
+        ]
+
+    def test_an_unaligned_lookalike_does_not_hide_an_aligned_mask(self):
+        # Arrange
+        blob = planted_routine(0x40)
+        blob[0x3E:0x40] = b"\x24\x01"
+
+        # Act
+        found = self.found(bytes(blob))
+
+        # Assert
+        assert found == reference_special_features(bytes(blob))
+        assert len(found) == 1
+
+    def test_agrees_with_an_exhaustive_scan_on_noisy_data(self):
+        # Arrange
+        noise = bytearray(((i * 2654435761) >> 13) & 0xFF for i in range(0x8000))
+        for at in range(0x100, 0x8000 - 0x40, 0x7C4):
+            noise[at : at + 0x24] = planted_routine(0, gap=8 + (at % 3) * 4)[:0x24]
+
+        # Act
+        found = self.found(bytes(noise))
+
+        # Assert
+        assert found == reference_special_features(bytes(noise))
+        assert len(found) > 5
+
+
 class TestAudit:
     def test_summarises_a_rom_with_a_mode_table(self):
         rom = bytes(0x400) + mode_entry() + bytes(0x400)
