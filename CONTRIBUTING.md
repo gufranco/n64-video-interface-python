@@ -5,41 +5,39 @@
 ```bash
 git clone https://github.com/gufranco/n64-video-interface-python.git
 cd n64-video-interface-python
-pip install -e ".[dev]"
-pytest
+uv sync
+uv run pytest
 ```
 
-The suite passes on a clean checkout with no ROMs, no patches and no cached
-catalogue. That is deliberate and it is enforced in CI: anybody has to be able to
-work on this without owning a collection. Tests that genuinely need real files
-carry the `artifacts` marker and skip when the files are absent.
+[uv](https://docs.astral.sh/uv/) installs the Python named in `.python-version`
+and the exact tool versions in `uv.lock`, so a local run and CI use the same ones.
+
+The suite passes on a clean checkout with no ROMs and no network. That is
+enforced in CI: anybody can work on this without owning a collection.
 
 ## The gates
 
 | Gate | Command |
 |------|---------|
-| Format | `ruff format --check .` |
-| Lint | `ruff check .` |
-| Types | `mypy` |
-| Tests | `pytest` |
+| Format | `uv run ruff format --check .` |
+| Lint | `uv run ruff check .` |
+| Types | `uv run mypy` |
+| Tests | `uv run pytest --cov` |
 
-Coverage is gated at 95% and every file is expected to clear it, not just the
-project as a whole. `mypy` runs strict with every optional error class the
+Coverage is gated at 100% of statements and branches. `mypy` runs strict with every optional error class the
 version offers.
 
 ## Things this project will not accept
 
 **No ROM, patch, firmware or save data, in any form.** Not as a test fixture, not
-base64 encoded, not "just a small one". The manifest carries identity and nothing
-else, and a test asserts that no manifest entry has a payload field. This is the
-one rule with no exceptions.
+base64 encoded, not "just a small one". This is the one rule with no exceptions.
 
 **No link or hint pointing at where to obtain those files.** The documentation
 describes how to confirm a file you already have is the right one. It does not
 help anybody find it.
 
 **No claim that has not been checked.** If a change asserts something about the
-hardware, the disk format or a patch, say how it was established. Several
+hardware, the ROM layout or a patch, say how it was established. Several
 findings in this project's history reversed on measurement, and the ones that
 survived did so because somebody ran them rather than reasoned about them.
 

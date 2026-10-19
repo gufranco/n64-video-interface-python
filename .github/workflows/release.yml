@@ -23,30 +23,27 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "22"
           cache: pnpm
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: "3.15"
 
       - name: Install release tooling
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      # Recorded before semantic-release runs, so the steps after it can tell a
-      # new version from a run that released nothing. A published release must
-      # never have its signed assets rewritten by a later docs-only push.
       - name: Record the tag that already existed
         id: before
         run: echo "tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
@@ -57,21 +54,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: pnpm exec semantic-release
 
-      # A bill of materials for what actually ships, and a signature over it.
-      #
-      # The interesting claim about this package is not its dependency tree: it
-      # is that the tree is empty. Nothing here imports anything outside the
-      # standard library at runtime, which is what lets it run on a machine that
-      # has only Python. That is worth checking rather than asserting, so the
-      # SBOM is generated from a fresh environment holding nothing but this
-      # package and the step after it fails if anything else turns up.
       - name: Describe what ships
         run: |
           python -m venv .sbom
           .sbom/bin/pip install --quiet --disable-pip-version-check .
-          python -m pip install --disable-pip-version-check cyclonedx-bom==6.0.0
+          python -m pip install --disable-pip-version-check cyclonedx-bom==7.5.0
           python -m cyclonedx_py environment .sbom \
-            --output-format json --outfile sbom.json
+            --output-format JSON --output-file sbom.json
         shell: bash
 
       - name: Nothing ships but the package itself
@@ -83,10 +72,6 @@ jobs:
 
           held = json.loads(Path("sbom.json").read_text())
           named = sorted(one["name"] for one in held.get("components", ()))
-          # pip and setuptools are put there by venv itself rather than by this
-          # package, and which of them appears depends on the Python version:
-          # 3.11 seeds both, 3.12 seeds only pip. A third name means the package
-          # grew a real runtime dependency.
           allowed = {"pip", "setuptools", "n64-video-interface"}
           extra = [one for one in named if one not in allowed]
           print(f"components: {', '.join(named) or 'none'}")
@@ -96,10 +81,6 @@ jobs:
           CHECK
         shell: bash
 
-      # cyclonedx-py records where it found the package, which on a runner is a
-      # build path nobody can act on. It discloses nothing, since /home/runner is
-      # the fixed home on every hosted runner, but it reads like a leaked local
-      # path and it answers no question a reader of an SBOM has.
       - name: Drop the build path from the bill of materials
         run: |
           python - <<'STRIP'
@@ -119,30 +100,19 @@ jobs:
               else:
                   component.pop("externalReferences", None)
           held.write_text(json.dumps(bom, indent=2, sort_keys=True) + "\n")
-          leaked = [
-              one
-              for one in json.dumps(bom).split('"')
-              if one.startswith("file://")
-          ]
-          print(f"::error title=Build path retained::{leaked}") if leaked else None
+          leaked = [one for one in json.dumps(bom).split('"') if one.startswith("file://")]
+          if leaked:
+              print(f"::error title=Build path retained::{leaked}")
           raise SystemExit(1 if leaked else 0)
           STRIP
         shell: bash
 
-      # Keyless, so verifying it needs no key from anybody here. What the
-      # signature binds is this workflow in this repository, which says the file
-      # came from the build rather than from somebody's laptop.
       - name: Sign it
         run: |
           python -m pip install --disable-pip-version-check sigstore==4.5.0
           python -m sigstore sign sbom.json --bundle sbom.json.sigstore.json
         shell: bash
 
-      # --match 'v*' is load-bearing. The moving `latest` tag below sits on the
-      # same commit as the newest version tag, and a bare `git describe` picks it
-      # over the version tag, which then fails as a release name because no
-      # release is called `latest`. Both steps below read this one answer so they
-      # cannot disagree about which tag was released.
       - name: Resolve the released tag
         id: released
         env:
@@ -169,10 +139,6 @@ jobs:
         run: gh release upload "${TAG}" sbom.json sbom.json.sigstore.json
         shell: bash
 
-      # The install line in README.md and GUIDE.md points at refs/tags/latest,
-      # so it never carries a version and never goes stale. This moves that tag
-      # onto whatever was just released. Every vN.N.N tag stays immutable for
-      # anyone who wants to pin one.
       - name: Move the latest tag onto this release
         if: steps.released.outputs.tag != ''
         env:

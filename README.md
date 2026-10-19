@@ -47,13 +47,11 @@ $ n64vi ips "Super Mario 64 (USA).z64" --no-aa --no-dither --output sharp.ips
 ```bash
 git clone https://github.com/gufranco/n64-video-interface-python.git
 cd n64-video-interface-python
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-n64vi --help
+uv sync
+uv run n64vi --help
 ```
 
-The virtual environment is not optional on a system Python. Homebrew, Debian, Ubuntu and Fedora all ship one marked externally managed, where `pip install` stops with `error: externally-managed-environment` and installs nothing.
+[uv](https://docs.astral.sh/uv/) creates the environment and installs the locked tool versions.
 
 To install without cloning:
 

@@ -1,27 +1,7 @@
-# Nothing here is new work. It is the same gate the pipeline runs, run again on a
-# schedule against whatever the ecosystem looks like that week.
-#
-# A Zip disk's FAT structures do not change, so a green build today is usually a
-# green build next year. What moves underneath it is everything else: a new Python
-# release changes annotation or integer behaviour, a linter release adds a rule, a
-# checker release finds something the old one did not, a runner image swaps a
-# default. Each of those turns a passing project into a failing one without a
-# commit, and the difference between hearing about it on a Monday and hearing
-# about it from the next person to open a pull request is this file.
-#
-# It runs on the newest Python available rather than the pinned one, because the
-# point is to find out what the next version breaks before it is the only version
-# anybody has.
-#
-# It does not run the tests that need a real collection. Those need somebody's
-# ROMs, which are not on a runner and never will be. The part of the gate that
-# needs no collection is the part that runs here, which is all of it but six.
 name: Weekly
 
 on:
   schedule:
-    # Early Monday, UTC. Late enough that a release landing over the weekend is
-    # already published, early enough to be read before the week starts.
     - cron: "29 6 * * 1"
   workflow_dispatch:
 
@@ -35,44 +15,30 @@ concurrency:
 jobs:
   ahead:
     name: On Python ${{ matrix.python }}, newest tools
-    runs-on: ubuntu-latest
-    env:
-      PYTHONPATH: src
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
-        # The oldest version supported and the newest that exists. A break in the
-        # first is a regression; a break in the second is a warning about the
-        # release everyone is about to be on.
-        python: ["3.11", "3.14"]
+        python: ["3.11", "3.15"]
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: ${{ matrix.python }}
-          allow-prereleases: true
+          persist-credentials: false
 
-      # Unpinned on purpose, which is the whole point of this file and the one
-      # place in the project where that is true. Every other workflow pins.
-      - name: Install the newest tools
-        run: |
-          python -m pip install --disable-pip-version-check \
-            --upgrade ruff mypy pytest pytest-cov
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: weekly-${{ matrix.python }}
+          python-version: ${{ matrix.python }}
 
       - name: Formatting, as the newest formatter sees it
-        run: ruff format --check .
+        run: uv run --no-dev --with ruff ruff format --check .
 
       - name: Lint, with whatever rules were added since
-        run: ruff check --output-format=github .
+        run: uv run --no-dev --with ruff ruff check --output-format=github .
 
       - name: Types, as the newest checker sees them
-        run: mypy
+        run: uv run --no-dev --with mypy mypy
 
       - name: The suite, against nothing but the repository
-        run: python -m pytest -q -p no:randomly
-
-      # The claim that holds without any user files: a resealed ROM verifies
-      # under the boot chip it was sealed for, on every supported runtime.
-      - name: The checksum claim still holds
-        run: python -m pytest src/n64_video_interface/checksum_test.py src/n64_video_interface/vi_test.py -q -p no:randomly
+        run: uv run --no-dev --with pytest pytest -q -p no:randomly -W error

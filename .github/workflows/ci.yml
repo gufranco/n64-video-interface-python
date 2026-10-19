@@ -13,34 +13,31 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  PYTHON_VERSION: "3.11"
-
 jobs:
   lint:
     name: Format and lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          persist-credentials: false
 
-      - name: Install ruff
-        run: pipx install ruff==0.16.3
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: lint
+
+      - name: Install the locked tools
+        run: uv sync --locked
 
       - name: Check formatting
-        run: ruff format --check .
+        run: uv run --locked ruff format --check .
 
       - name: Lint
-        run: ruff check --output-format=github .
+        run: uv run --locked ruff check --output-format=github .
 
-      # The workflows are the one part of this repository that nothing else
-      # checks: a mistake in them is found by pushing, and the push is the thing
-      # being checked.
       - name: Lint the workflows
-        uses: raven-actions/actionlint@v2
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7  # v2.2.0
 
       - name: Lint the shell scripts
         run: |
@@ -48,9 +45,9 @@ jobs:
           sudo apt-get install -y shellcheck
           shellcheck --severity=style --shell=bash scripts/*.sh
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -63,24 +60,22 @@ jobs:
 
   types:
     name: Types
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          persist-credentials: false
 
-      - name: Install the type checker
-        run: pipx install mypy==1.18.2
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: types
 
-      # Strict, with every optional error class the version offers. This code
-      # decides which bytes of a ROM are rewritten and what the checksum is
-      # resealed to, so a None or a width crossing a boundary is exactly what
-      # this catches. The settings live in pyproject.toml so a local run and this
-      # one agree.
+      - name: Install the locked tools
+        run: uv sync --locked
+
       - name: Every annotation has to hold
-        run: mypy
+        run: uv run --locked mypy
 
   test:
     name: ${{ matrix.label }}, Python ${{ matrix.python }}
@@ -89,26 +84,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, python: "3.11", label: Linux x86_64 }
-          - { os: ubuntu-latest, python: "3.12", label: Linux x86_64 }
-          - { os: ubuntu-latest, python: "3.13", label: Linux x86_64 }
-          - { os: ubuntu-24.04-arm, python: "3.13", label: Linux arm64 }
-          - { os: macos-15-intel, python: "3.13", label: macOS Intel }
-          - { os: macos-latest, python: "3.13", label: macOS Apple silicon }
+          - {os: ubuntu-26.04, python: "3.11", label: Linux x86_64}
+          - {os: ubuntu-26.04, python: "3.12", label: Linux x86_64}
+          - {os: ubuntu-26.04, python: "3.13", label: Linux x86_64}
+          - {os: ubuntu-26.04, python: "3.14", label: Linux x86_64}
+          - {os: ubuntu-26.04, python: "3.15", label: Linux x86_64}
+          - {os: ubuntu-24.04-arm, python: "3.15", label: Linux arm64}
+          - {os: macos-26-intel, python: "3.15", label: macOS Intel}
+          - {os: macos-26, python: "3.15", label: macOS Apple silicon}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: test-${{ matrix.os }}-${{ matrix.python }}
           python-version: ${{ matrix.python }}
 
-      - name: Install the test tooling
-        run: python -m pip install --disable-pip-version-check pytest==8.3.4 pytest-cov==6.0.0
+      - name: Install the locked tools
+        run: uv sync --locked
 
-      # No ROMs and no network. That is the state a contributor clones into, and
-      # the suite has to pass there. Every ROM the tests need is synthesised.
       - name: Run the suite against nothing but the repository
-        run: python -m pytest -q -p no:randomly
+        run: uv run --locked pytest -q -p no:randomly -W error
 
   platform:
     name: Installed on ${{ matrix.label }}
@@ -117,20 +116,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, label: Linux x86_64 }
-          - { os: ubuntu-24.04-arm, label: Linux arm64 }
-          - { os: macos-15-intel, label: macOS Intel }
-          - { os: macos-latest, label: macOS Apple silicon }
+          - {os: ubuntu-26.04, label: Linux x86_64}
+          - {os: ubuntu-24.04-arm, label: Linux arm64}
+          - {os: macos-26-intel, label: macOS Intel}
+          - {os: macos-26, label: macOS Apple silicon}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: "3.13"
+          persist-credentials: false
 
-      # Running the suite from a checkout proves the code is portable. It does
-      # not prove the thing a user gets is, so this installs the package the way
-      # they would and drives it through its own entry point.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.15"
+
       - name: Install it the way a user would
         run: python -m pip install --disable-pip-version-check .
 
@@ -206,43 +204,42 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          persist-credentials: false
 
-      - name: Install the test tooling
-        run: python -m pip install --disable-pip-version-check pytest==8.3.4 pytest-cov==6.0.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: coverage
 
-      # A gate nothing runs is a number free to drift. The threshold is 100%
-      # statement and branch, so this job is what keeps it there.
+      - name: Install the locked tools
+        run: uv sync --locked
+
       - name: Coverage must clear the gate in pyproject.toml
-        run: python -m pytest -q -p no:randomly --cov --cov-report=term-missing
+        run: uv run --locked pytest -q -p no:randomly --cov --cov-report=term-missing
 
   distribution:
     name: The wheel carries no game data
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: distribution
 
       - name: Build it
-        run: |
-          python -m pip install --disable-pip-version-check build==1.2.2.post1
-          python -m build
+        run: uv build
 
-      # This package edits copyrighted files and carries none of them. That claim
-      # is worth checking mechanically on every change rather than trusting a
-      # reviewer to notice.
       - name: Nothing copyrighted ships
         run: |
-          python - <<'CHECK'
+          python3 - <<'CHECK'
           import re
           import sys
           import zipfile
@@ -250,7 +247,7 @@ jobs:
 
           wheel = next(Path("dist").glob("*.whl"))
           names = zipfile.ZipFile(wheel).namelist()
-          banned = re.compile(r"\.(z64|v64|n64|rom|aps|ips|zps|hdr|ram|eep|fla|sra|img|dat)$", re.I)
+          banned = re.compile(r"\.(z64|v64|n64|rom|aps|ips|zps|hdr|ram|eep|fla|sra|img|dat|png)$", re.I)
           found = [one for one in names if banned.search(one)]
           print(f"{len(names)} files in {wheel.name}")
           if found:

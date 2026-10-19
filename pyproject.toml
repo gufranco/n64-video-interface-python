@@ -18,17 +18,20 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Multimedia :: Graphics",
     "Topic :: Utilities",
     "Typing :: Typed",
 ]
 dependencies = []
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "pytest>=8.0",
-    "pytest-cov>=5.0",
-    "ruff>=0.6",
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.1",
 ]
 
 [project.scripts]
@@ -48,7 +51,7 @@ packages = ["src/n64_video_interface"]
 exclude = ["*_test.py", "conftest.py"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/n64_video_interface", "tests", "README.md", "LICENSE.txt", "pyproject.toml"]
+include = ["src/n64_video_interface", "README.md", "LICENSE.txt", "pyproject.toml"]
 exclude = ["**/*.z64", "**/*.v64", "**/*.n64", "**/*.ips", "**/*.aps"]
 
 [tool.pytest.ini_options]
