@@ -143,6 +143,16 @@ class TestFindModeTables:
             (0x270, "PAL"),
         ]
 
+    def test_finds_a_high_resolution_interlaced_entry(self):
+        # Arrange
+        rom = bytes(16) + mode_entry(ctrl=0x0000305E, width=1280, vsync=0x20C, kind=0x0A000000)
+
+        # Act
+        found = vi.find_mode_tables(rom)
+
+        # Assert
+        assert [(entry.width, entry.vsync) for entry in found] == [(1280, 0x20C)]
+
     def test_records_the_declared_width(self):
         found = vi.find_mode_tables(bytes(16) + mode_entry(width=640))
 
