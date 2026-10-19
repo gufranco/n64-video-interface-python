@@ -50,7 +50,7 @@ class TestFindingModeEntries:
         # Assert
         assert [entry.standard for entry in found] == [standard]
 
-    @pytest.mark.parametrize("width", [320, 640, 1280])
+    @pytest.mark.parametrize("width", [292, 320, 640, 1280])
     def test_every_width_seen_in_retail_dumps_is_found(self, width):
         # Arrange
         rom = bytes(16) + mode_entry(width=width)
