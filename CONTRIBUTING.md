@@ -50,6 +50,10 @@ hardware, the ROM layout or a patch, say how it was established. Several
 findings in this project's history reversed on measurement, and the ones that
 survived did so because somebody ran them rather than reasoned about them.
 
+**No option that the game can switch back on.** A disabled option stays disabled
+for the whole run, whatever the game writes later. [`AGENTS.md`](AGENTS.md) sets
+out how the code guarantees it and the check a title has to pass.
+
 ## Distribution
 
 Releases go to this repository's releases page and nowhere else.
