@@ -127,8 +127,13 @@ class TestFindingSwitchOnRequests:
 
     @pytest.mark.parametrize(
         "block",
-        [{"setter_word": LUI_V1_ONE}, {"branch_op": 0x14}, {"guard_gap": 6}],
-        ids=["setter in another register", "branch likely", "guard in an earlier slot"],
+        [
+            {"setter_word": LUI_V1_ONE},
+            {"branch_op": 0x14},
+            {"guard_gap": 6},
+            {"flag": 0x4000, "branch_op": 0x14},
+        ],
+        ids=["setter in another register", "branch likely", "guard in an earlier slot", "HAL flag"],
     )
     def test_compiler_variations_of_the_dedither_block_are_found(self, block):
         # Arrange
@@ -141,7 +146,7 @@ class TestFindingSwitchOnRequests:
         assert [r.guard for r in found] == [placed["dedither"][0]]
 
     @pytest.mark.parametrize(
-        "block", [{"flag": 0x4000}, {"skip": 1}], ids=["other flag", "branch short of setter"]
+        "block", [{"flag": 0x0800}, {"skip": 1}], ids=["other flag", "branch short of setter"]
     )
     def test_a_block_that_is_not_the_dedither_request_is_ignored(self, block):
         # Arrange

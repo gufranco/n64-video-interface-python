@@ -26,6 +26,7 @@ SEARCH_FORWARD = 0x80
 REGISTER = 31
 HALF = 0xFFFF
 SIGN = 0x8000
+HAL_DEDITHER = 0x4000
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,10 +40,13 @@ class SwitchSpec:
     flag: int
     opcode: int
     immediate: int
+    alternate: int | None = None
 
 
 SWITCHES = {
-    "dedither": SwitchSpec(flag=0x0040, opcode=OP_LUI, immediate=LUI_DITHER_FILTER_UPPER),
+    "dedither": SwitchSpec(
+        flag=0x0040, opcode=OP_LUI, immediate=LUI_DITHER_FILTER_UPPER, alternate=HAL_DEDITHER
+    ),
     "divot": SwitchSpec(flag=0x0010, opcode=OP_ORI, immediate=CTRL_DIVOT),
     "gamma dither": SwitchSpec(flag=0x0004, opcode=OP_ORI, immediate=CTRL_GAMMA_DITHER),
     "gamma": SwitchSpec(flag=0x0001, opcode=OP_ORI, immediate=CTRL_GAMMA),
@@ -137,7 +141,7 @@ def _requests_in(rom: bytes, site: SpecialFeaturesSite, switch: str) -> list[Swi
         if not _sets_bit(_word(rom, setter), spec):
             continue
         guard = _guard_for(rom, setter, floor)
-        if guard is not None and guard[2] == spec.flag:
+        if guard is not None and guard[2] in (spec.flag, spec.alternate):
             found.append(SwitchRequest(switch, setter, guard[0], guard[1], guard[2]))
     return found
 

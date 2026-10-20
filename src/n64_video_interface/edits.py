@@ -4,9 +4,9 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import rdp, vifilter
+from . import hal, rdp, vifilter
 from .ctrl import apply_changes
-from .features import SWITCHES, SwitchRequest, find_switch_requests
+from .features import SWITCHES, SwitchRequest, find_special_features, find_switch_requests
 from .modes import find_mode_tables
 
 NO_TABLE = "no video mode table could be proven present"
@@ -32,6 +32,14 @@ RDP_DITHER_LABELS = {
 }
 GUARD_KEEP = 0xFFFF0000
 DEDITHER = "dedither"
+HAL_BITS = (
+    ("dedither", "dither_filter", hal.DEDITHER),
+    ("divot", "divot", 0x0010),
+    ("gamma dither", "gamma_dither", 0x0004),
+    ("gamma", "gamma", 0x0008),
+)
+HAL_BEFORE = 0x200
+HAL_AFTER = 0x300
 Change = tuple[int, int, int]
 
 
@@ -78,6 +86,7 @@ class RegionEdit:
     requests: tuple[SwitchRequest, ...]
     microcodes: int
     filters: int = 0
+    setters: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,22 +132,41 @@ def edit_region(data: bytes, settings: Settings) -> RegionEdit:
     switches = tuple(
         (r.guard, _word(data, r.guard), _word(data, r.guard) & GUARD_KEEP) for r in requests
     )
+    setters = _hal_changes(data, settings, requests)
     caves = [_dead_block(data, r) for r in requests if r.switch == DEDITHER]
-    switched, filters = vifilter.install(
-        _write(data, (*table, *switches)), caves, vifilter.mask_for(settings)
+    switched, filters, stores = vifilter.install(
+        _write(data, (*table, *switches, *setters)), caves, vifilter.mask_for(settings)
     )
     microcodes = rdp.count_microcodes(data) if settings.rdp_bits else 0
     dithered, rdp_changes = (
         rdp.disable_dither(switched, settings.rdp_bits) if microcodes else (switched, ())
     )
-    changes = (*table, *switches, *filters, *rdp_changes)
-    starts = {start for start, _ in caves}
-    stores = sum(
-        1
-        for offset, _, after in filters
-        if after >> 26 == vifilter.OP_BEQ and vifilter.branch_target(offset, after) in starts
+    changes = (*table, *switches, *setters, *filters, *rdp_changes)
+    found = (len(entries), len(table), requests, microcodes, stores, len(setters))
+    return RegionEdit(dithered, changes, *found)
+
+
+def _hal_changes(
+    data: bytes, settings: Settings, requests: Sequence[SwitchRequest]
+) -> tuple[Change, ...]:
+    guarded = {request.switch for request in requests}
+    bits = {
+        bit
+        for switch, name, bit in HAL_BITS
+        if getattr(settings, name) is False and switch not in guarded
+    }
+    windows = [
+        range(max(0, s.offset - HAL_BEFORE), s.masks["antialias"] + HAL_AFTER)
+        for s in find_special_features(data)
+    ]
+    setters = tuple(change for window in windows for change in hal.find_setters(data, window, bits))
+    rebuilt = tuple(
+        change
+        for window in windows
+        if settings.antialiasing is False
+        for change in hal.find_aa_rebuild(data, window)
     )
-    return RegionEdit(dithered, changes, len(entries), len(table), requests, microcodes, stores)
+    return (*setters, *rebuilt)
 
 
 def _dead_block(data: bytes, request: SwitchRequest) -> tuple[int, int]:
@@ -161,6 +189,10 @@ def describe(edits: Sequence[RegionEdit], settings: Settings) -> str:
         label = RDP_DITHER_LABELS[settings.rdp_bits]
         parts.append(f"{label} dither forced off in {microcodes} {noun}")
     parts.extend([NO_MICROCODE_NOTE] if settings.rdp_bits and not microcodes else [])
+    setters = sum(edit.setters for edit in edits)
+    parts.extend(
+        [f"{setters} VI {'setter' if setters == 1 else 'setters'} neutralised"] if setters else []
+    )
     stores = sum(edit.filters for edit in edits)
     parts.extend(
         [f"{stores} VI control {'store' if stores == 1 else 'stores'} filtered"] if stores else []

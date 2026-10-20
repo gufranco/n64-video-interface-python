@@ -118,7 +118,7 @@ class TestTheFilter:
     )
     def test_everything_off_forces_point_sampling_by_pixel_size(self, ctrl, expected):
         # Arrange
-        data, _ = vifilter.install(
+        data, _, _ = vifilter.install(
             region(), [(CAVE_AT, CAVE_AT + 4 * CAVE_WORDS)], vifilter.mask_for(ALL)
         )
 
@@ -135,7 +135,7 @@ class TestTheFilter:
     )
     def test_a_small_cave_still_turns_anti_aliasing_off_by_resampling(self, ctrl, expected):
         # Arrange
-        data, _ = vifilter.install(
+        data, _, _ = vifilter.install(
             region(cave=6), [(CAVE_AT, CAVE_AT + 24)], vifilter.mask_for(ALL)
         )
 
@@ -165,7 +165,7 @@ class TestTheFilter:
         data = region(after=moved)
 
         # Act
-        patched, _ = vifilter.install(data, [(CAVE_AT, CAVE_AT + 32)], vifilter.mask_for(ALL))
+        patched, _, _ = vifilter.install(data, [(CAVE_AT, CAVE_AT + 32)], vifilter.mask_for(ALL))
 
         # Assert
         assert (
@@ -181,7 +181,7 @@ class TestTheFilter:
     def test_without_anti_aliasing_the_short_filter_only_clears_bits(self):
         # Arrange
         settings = Settings(divot=False, gamma_dither=False, dither_filter=False)
-        data, _ = vifilter.install(
+        data, _, _ = vifilter.install(
             region(cave=3), [(CAVE_AT, CAVE_AT + 12)], vifilter.mask_for(settings)
         )
 
@@ -196,7 +196,7 @@ class TestTheFilter:
         data = region()
 
         # Act
-        patched, changes = vifilter.install(
+        patched, changes, _ = vifilter.install(
             data, [(CAVE_AT, CAVE_AT + 4 * CAVE_WORDS)], vifilter.mask_for(ALL)
         )
 
@@ -220,7 +220,7 @@ class TestTheFilter:
         data = region()
 
         # Act
-        patched, changes = vifilter.install(data, caves, vifilter.mask_for(ALL))
+        patched, changes, _ = vifilter.install(data, caves, vifilter.mask_for(ALL))
 
         # Assert
         assert (patched, changes) == (data, ())
@@ -231,7 +231,7 @@ class TestTheFilter:
         struct.pack_into(">I", data, CAVE_AT - 8, 0x10000002)
 
         # Act
-        patched, changes = vifilter.install(
+        patched, changes, _ = vifilter.install(
             bytes(data), [(CAVE_AT, CAVE_AT + 28)], vifilter.mask_for(ALL)
         )
 
@@ -243,13 +243,35 @@ class TestTheFilter:
         mask = vifilter.mask_for(Settings(antialiasing=False))
 
         # Act
-        patched, changes = vifilter.install(region(), [(CAVE_AT, CAVE_AT + 28)], mask)
+        patched, changes, _ = vifilter.install(region(), [(CAVE_AT, CAVE_AT + 28)], mask)
 
         # Assert
         assert (patched, changes) == (region(), ())
 
 
 ALL = Settings(antialiasing=False, divot=False, gamma_dither=False, dither_filter=False)
+
+
+class TestADistantBase:
+    def test_a_base_loaded_far_back_in_straight_code_still_counts(self):
+        # Arrange
+        data = region(before=(*(NOP,) * 20, LOAD_CONTROL))
+
+        # Act
+        sites = vifilter.find_sites(data)
+
+        # Assert
+        assert [s.store for s in sites] == [SWAP_AT]
+
+    def test_a_branch_between_a_distant_base_and_the_store_rules_it_out(self):
+        # Arrange
+        data = region(before=(*(NOP,) * 5, 0x10000001, *(NOP,) * 14, LOAD_CONTROL))
+
+        # Act
+        sites = vifilter.find_sites(data)
+
+        # Assert
+        assert sites == ()
 
 
 class TestRelocatableCode:
@@ -262,7 +284,7 @@ class TestRelocatableCode:
         struct.pack_into(">I", data, at, 0x3C180000)
 
         # Act
-        patched, changes = vifilter.install(
+        patched, changes, _ = vifilter.install(
             bytes(data), [(CAVE_AT, CAVE_AT + 28)], vifilter.mask_for(ALL)
         )
 
@@ -290,7 +312,7 @@ class TestTheLoadEntry:
         load = SWAP_AT - 12
 
         # Act
-        patched, changes = vifilter.install(
+        patched, changes, _ = vifilter.install(
             bytes(data), [(CAVE_AT, CAVE_AT + 16)], vifilter.mask_for(ALL)
         )
 
@@ -316,3 +338,94 @@ class TestTheLoadEntry:
 
         # Assert
         assert sites == ()
+
+
+ENTRY = 0x80000400
+
+
+def booted_rom(jal_targets):
+    data = bytearray(0x101000 + 0x100)
+    data[:4] = bytes.fromhex("80371240")
+    struct.pack_into(">I", data, 8, ENTRY)
+    for index, target in enumerate(jal_targets):
+        struct.pack_into(
+            ">I",
+            data,
+            0x2000 + index * 4,
+            0x0C000000 | ((ENTRY - 0x1000 + target) >> 2 & 0x3FFFFFF),
+        )
+        struct.pack_into(">I", data, target, 0x27BDFFE8)
+    return data
+
+
+class TestTheBootSegment:
+    def test_a_base_that_lands_calls_on_function_starts_is_trusted(self):
+        # Arrange
+        data = booted_rom([0x4000 + 0x40 * i for i in range(20)])
+
+        # Act
+        base = vifilter.boot_base(bytes(data))
+
+        # Assert
+        assert base == ENTRY - 0x1000
+
+    @pytest.mark.parametrize(
+        "data",
+        [bytes(0x400), bytes(booted_rom([0x4000 + 0x40 * i for i in range(10)]))],
+        ids=["not a whole ROM", "too few calls"],
+    )
+    def test_a_base_without_enough_evidence_is_not_trusted(self, data):
+        # Arrange
+        given = data
+
+        # Act
+        base = vifilter.boot_base(given)
+
+        # Assert
+        assert base is None
+
+    def test_a_boot_chip_that_moves_the_entry_point_is_recognised(self):
+        # Arrange
+        data = booted_rom([0x4000 + 0x40 * i for i in range(20)])
+        struct.pack_into(">I", data, 8, ENTRY + 0x100000)
+
+        # Act
+        base = vifilter.boot_base(bytes(data))
+
+        # Assert
+        assert base == ENTRY - 0x1000
+
+    def test_a_far_cave_is_reached_by_an_absolute_jump(self):
+        # Arrange
+        data = booted_rom([0x4000 + 0x40 * i for i in range(20)])
+        store, cave = 0x80000, 0x2100
+        words_at = (0x3C0DA440, LOAD_CONTROL, STORE_CONTROL, NEXT, NOP)
+        for index, value in enumerate(words_at):
+            struct.pack_into(">I", data, store - 8 + index * 4, value)
+
+        # Act
+        patched, _, installed = vifilter.install(
+            bytes(data), [(cave, cave + 28)], vifilter.mask_for(ALL)
+        )
+
+        # Assert
+        assert (installed, word(patched, store) >> 26, (word(patched, store) & 0x3FFFFFF) << 2) == (
+            1,
+            0x02,
+            (ENTRY - 0x1000 + cave) & 0x0FFFFFFF,
+        )
+
+    def test_a_title_whose_integrity_check_rejects_code_edits_is_left_alone(self):
+        # Arrange
+        data = booted_rom([0x4000 + 0x40 * i for i in range(20)])
+        data[0x3C:0x3E] = b"AL"
+        for index, value in enumerate((0x3C0DA440, LOAD_CONTROL, STORE_CONTROL, NEXT, NOP)):
+            struct.pack_into(">I", data, 0x2100 - 8 + index * 4, value)
+
+        # Act
+        patched, changes, installed = vifilter.install(
+            bytes(data), [(0x2200, 0x2200 + 28)], vifilter.mask_for(ALL)
+        )
+
+        # Assert
+        assert (patched, changes, installed) == (bytes(data), (), 0)

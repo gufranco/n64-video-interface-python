@@ -10,6 +10,7 @@ from .ctrl import CTRL_AA_MASK, CTRL_DIVOT, CTRL_GAMMA, CTRL_GAMMA_DITHER, CTRL_
 VI_BASE = 0xA440
 CONTROL_FIELD = 0x000C
 LOOKBACK = 16
+BASE_LOOKBACK = 64
 HALF = 0xFFFF
 SIGN = 0x8000
 WRAP = 0x10000
@@ -28,6 +29,18 @@ NOP = 0
 TARGET_REACH = 0x8000
 RELOCATION_REACH = 0x100
 UNRELOCATED_MASK = 0xFFE0FFFF
+ROM_MAGIC = b"\x80\x37\x12\x40"
+ENTRY_AT = 8
+BOOT_START = 0x1000
+BOOT_END = 0x101000
+SEGMENT = 0x80000000
+JUMP_FIELD = 0x03FFFFFF
+STACK_FRAME = 0x27BD
+JAL_SAMPLE = 256
+JAL_MINIMUM = 16
+BOOT_SHIFTS = (0, 0x100000, 0x200000)
+GAME_CODE = slice(0x3C, 0x3E)
+INTEGRITY_CHECKED = frozenset({b"AL"})
 Change = tuple[int, int, int]
 
 
@@ -63,8 +76,8 @@ def _written(word: int) -> int | None:
     return REGISTER if op == OP_JAL else None
 
 
-def _last_write(data: bytes, at: int, register: int) -> int | None:
-    for before in range(at - 4, max(-4, at - 4 * LOOKBACK), -4):
+def _last_write(data: bytes, at: int, register: int, lookback: int = LOOKBACK) -> int | None:
+    for before in range(at - 4, max(-4, at - 4 * lookback), -4):
         if _written(_word(data, before)) == register:
             return before
     return None
@@ -89,8 +102,17 @@ def _reads(word: int, register: int) -> bool:
     return register in ((word >> 21) & REGISTER, (word >> 16) & REGISTER)
 
 
+def _straight(data: bytes, start: int, end: int) -> bool:
+    inside = range(start + 4, end, 4)
+    return not any(_is_branch(_word(data, at)) for at in inside) and not any(
+        _targeted(data, at) for at in inside
+    )
+
+
 def _feeds(data: bytes, store: int, value: int, base: int) -> int | None:
-    load, origin = _last_write(data, store, value), _last_write(data, store, base)
+    load, origin = _last_write(data, store, value), _last_write(data, store, base, BASE_LOOKBACK)
+    if origin is not None and store - origin > 4 * LOOKBACK and not _straight(data, origin, store):
+        return None
     if load is None or origin is None:
         return None
     loaded, based = _word(data, load), _word(data, origin)
@@ -163,84 +185,133 @@ def branch_target(at: int, word: int) -> int:
     return at + 4 + ((offset - WRAP) if offset & SIGN else offset) * 4
 
 
-def _branch(at: int, target: int) -> int:
-    return (OP_BEQ << 26) | (((target - at - 4) >> 2) & HALF)
+@dataclass(frozen=True, slots=True)
+class Linker:
+    base: int | None = None
+
+    def near(self, at: int, target: int) -> bool:
+        return abs((target - at - 4) >> 2) <= REACH
+
+    def booted(self, at: int) -> bool:
+        return self.base is not None and BOOT_START <= at < BOOT_END
+
+    def reaches(self, at: int, target: int) -> bool:
+        return self.near(at, target) or (self.booted(at) and self.booted(target))
+
+    def link(self, at: int, target: int) -> int:
+        if self.near(at, target) or self.base is None:
+            return (OP_BEQ << 26) | (((target - at - 4) >> 2) & HALF)
+        return (OP_J << 26) | (((self.base + target) >> 2) & JUMP_FIELD)
 
 
-def _tail(site: Site, at: int, store: int) -> tuple[int, ...]:
+def _integrity_checked(data: bytes) -> bool:
+    return data[:4] == ROM_MAGIC and data[GAME_CODE] in INTEGRITY_CHECKED
+
+
+def boot_base(data: bytes) -> int | None:
+    if data[:4] != ROM_MAGIC or len(data) < BOOT_END:
+        return None
+    jals = [
+        w for w in (_word(data, at) for at in range(BOOT_START, BOOT_END, 4)) if w >> 26 == OP_JAL
+    ]
+    sample = jals[:JAL_SAMPLE]
+    if len(sample) < JAL_MINIMUM:
+        return None
+    entry = _word(data, ENTRY_AT) - BOOT_START
+    scored = [(_hits(data, sample, entry - shift), entry - shift) for shift in BOOT_SHIFTS]
+    hits, base = max(scored)
+    return base if hits * 2 >= len(sample) else None
+
+
+def _hits(data: bytes, jals: Sequence[int], base: int) -> int:
+    return sum(1 for jal in jals if _prologue(data, ((jal & JUMP_FIELD) << 2 | SEGMENT) - base))
+
+
+def _prologue(data: bytes, at: int) -> bool:
+    return (
+        0 <= at < len(data) - 3
+        and _word(data, at) >> 16 == STACK_FRAME
+        and _word(data, at) & SIGN != 0
+    )
+
+
+def _tail(site: Site, at: int, store: int, linker: Linker) -> tuple[int, ...]:
     if site.moved is None:
-        return _branch(at, site.store + 8), store
-    return store, _branch(at + 4, site.store + 8), site.moved
+        return linker.link(at, site.store + 8), store
+    return store, linker.link(at + 4, site.store + 8), site.moved
 
 
-def _forms(site: Site, mask: Mask, cave: int, data: bytes) -> list[tuple[int, ...]]:
+def _forms(site: Site, mask: Mask, cave: int, data: bytes, linker: Linker) -> list[tuple[int, ...]]:
     clear = (OP_ANDI << 26) | (site.value << 21) | (site.value << 16) | mask.keep
     resample = (OP_ORI << 26) | (site.value << 21) | (site.value << 16) | POINT_SAMPLE
     if site.load is not None:
         finish = resample if mask.point_sample else NOP
-        return [(_word(data, site.load), clear, _branch(cave + 8, site.load + 8), finish)]
+        return [(_word(data, site.load), clear, linker.link(cave + 8, site.load + 8), finish)]
     store = (OP_SW << 26) | (site.base << 21) | (site.value << 16)
     if not mask.point_sample:
-        return [(clear, *_tail(site, cave + 4, store))]
+        return [(clear, *_tail(site, cave + 4, store, linker))]
     pixel = (OP_ANDI << 26) | (site.value << 21) | (site.base << 16) | CTRL_TYPE_MASK
     shift = (site.base << 16) | (site.base << 11) | (AA_SHIFT << 6)
     merge = (site.value << 21) | (site.base << 16) | (site.value << 11) | FUNCT_OR
     restore = (OP_LUI << 26) | (site.base << 16) | VI_BASE
     return [
-        (clear, pixel, shift, merge, restore, *_tail(site, cave + 20, store)),
-        (clear, resample, *_tail(site, cave + 8, store)),
+        (clear, pixel, shift, merge, restore, *_tail(site, cave + 20, store, linker)),
+        (clear, resample, *_tail(site, cave + 8, store, linker)),
     ]
 
 
-def _reachable(site: Site, cave: int) -> bool:
+def _reachable(site: Site, cave: int, linker: Linker) -> bool:
     entry = site.store if site.load is None else site.load
-    return abs((cave - entry - 4) >> 2) <= REACH and abs((entry + 8 - cave) >> 2) <= REACH
+    return linker.reaches(entry, cave) and linker.reaches(cave, entry + 8)
 
 
-def _writes(site: Site, body: tuple[int, ...], cave: int) -> list[tuple[int, int]]:
+def _writes(site: Site, body: tuple[int, ...], cave: int, linker: Linker) -> list[tuple[int, int]]:
     if site.load is not None:
         return [
-            (site.load, _branch(site.load, cave)),
+            (site.load, linker.link(site.load, cave)),
             *((cave + 4 * i, v) for i, v in enumerate(body)),
         ]
-    entry = [(site.store, _branch(site.store, cave))]
+    entry = [(site.store, linker.link(site.store, cave))]
     entry.extend([(site.store + 4, NOP)] if site.moved is not None else [])
     return [*entry, *((cave + 4 * index, value) for index, value in enumerate(body))]
 
 
 def _plan(
     data: bytes, sites: Sequence[Site], caves: Sequence[tuple[int, int]], mask: Mask
-) -> list[tuple[int, int]]:
+) -> tuple[list[tuple[int, int]], int]:
     free = list(caves)
+    linker = Linker(boot_base(data))
     writes: list[tuple[int, int]] = []
+    installed = 0
     for site in sites:
         options = [
             (index, body)
             for index, (start, end) in enumerate(free)
-            if _reachable(site, start)
-            for body in _forms(site, mask, start, data)
+            if _reachable(site, start, linker)
+            for body in _forms(site, mask, start, data, linker)
             if len(body) * 4 <= end - start
         ]
         if options:
             index, body = options[0]
-            writes.extend(_writes(site, body, free.pop(index)[0]))
-    return writes
+            writes.extend(_writes(site, body, free.pop(index)[0], linker))
+            installed += 1
+    return writes, installed
 
 
 def install(
     data: bytes, caves: Sequence[tuple[int, int]], mask: Mask | None
-) -> tuple[bytes, tuple[Change, ...]]:
-    if mask is None:
-        return data, ()
+) -> tuple[bytes, tuple[Change, ...], int]:
+    if mask is None or _integrity_checked(data):
+        return data, (), 0
     unreached = [
         c
         for c in caves
         if not relocatable(data, c[0])
         and not any(_targeted(data, at) for at in range(c[0], c[1], 4))
     ]
-    writes = _plan(data, find_sites(data), unreached, mask)
+    writes, installed = _plan(data, find_sites(data), unreached, mask)
     out = bytearray(data)
     changes = tuple((offset, _word(data, offset), value) for offset, value in writes)
     for offset, value in writes:
         struct.pack_into(">I", out, offset, value)
-    return bytes(out), changes
+    return bytes(out), changes, installed
