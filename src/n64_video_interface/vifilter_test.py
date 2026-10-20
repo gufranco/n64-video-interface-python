@@ -39,6 +39,8 @@ def run_filter(data, ctrl):
         op, rs, rt = value >> 26, (value >> 21) & 31, (value >> 16) & 31
         if op == 0x0C:
             registers[rt] = registers[rs] & (value & 0xFFFF)
+        elif op == 0x0D:
+            registers[rt] = registers[rs] | (value & 0xFFFF)
         elif op == 0x0F:
             registers[rt] = (value & 0xFFFF) << 16
         elif op == 0x2B:
@@ -126,6 +128,56 @@ class TestTheFilter:
         # Assert
         assert written == expected
 
+    @pytest.mark.parametrize(
+        ("ctrl", "expected"),
+        [(0x0001311E, 0x0000320A), (0x0001301F, 0x0000320B)],
+        ids=["16-bit", "32-bit"],
+    )
+    def test_a_small_cave_still_turns_anti_aliasing_off_by_resampling(self, ctrl, expected):
+        # Arrange
+        data, _ = vifilter.install(
+            region(cave=6), [(CAVE_AT, CAVE_AT + 24)], vifilter.mask_for(ALL)
+        )
+
+        # Act
+        written = run_filter(data, ctrl)
+
+        # Assert
+        assert written == expected
+
+    @pytest.mark.parametrize("target", [SWAP_AT, SWAP_AT + 4], ids=["store", "moved"])
+    def test_a_store_or_moved_instruction_that_a_branch_reaches_is_not_a_site(self, target):
+        # Arrange
+        data = bytearray(region(after=0x8CCD0000))
+        struct.pack_into(
+            ">I", data, SWAP_AT + 0x20, 0x14C80000 | (((target - SWAP_AT - 0x24) >> 2) & 0xFFFF)
+        )
+
+        # Act
+        sites = vifilter.find_sites(bytes(data))
+
+        # Assert
+        assert sites == ()
+
+    def test_an_instruction_that_reuses_the_base_moves_after_the_store(self):
+        # Arrange
+        moved = 0x8CCD0000
+        data = region(after=moved)
+
+        # Act
+        patched, _ = vifilter.install(data, [(CAVE_AT, CAVE_AT + 32)], vifilter.mask_for(ALL))
+
+        # Assert
+        assert (
+            run_filter(patched, 0x0001311E),
+            word(patched, SWAP_AT + 4),
+            word(patched, CAVE_AT + 28),
+        ) == (
+            0x0000320A,
+            NOP,
+            moved,
+        )
+
     def test_without_anti_aliasing_the_short_filter_only_clears_bits(self):
         # Arrange
         settings = Settings(divot=False, gamma_dither=False, dither_filter=False)
@@ -160,7 +212,7 @@ class TestTheFilter:
 
     @pytest.mark.parametrize(
         "caves",
-        [[], [(CAVE_AT, CAVE_AT + 24)], [(0x40000, 0x40000 + 28)]],
+        [[], [(CAVE_AT, CAVE_AT + 12)], [(0x40000, 0x40000 + 28)]],
         ids=["no cave", "too small", "out of reach"],
     )
     def test_without_a_cave_that_fits_nothing_is_changed(self, caves):
@@ -172,6 +224,19 @@ class TestTheFilter:
 
         # Assert
         assert (patched, changes) == (data, ())
+
+    def test_a_cave_that_a_branch_reaches_is_not_used(self):
+        # Arrange
+        data = bytearray(region())
+        struct.pack_into(">I", data, CAVE_AT - 8, 0x10000002)
+
+        # Act
+        patched, changes = vifilter.install(
+            bytes(data), [(CAVE_AT, CAVE_AT + 28)], vifilter.mask_for(ALL)
+        )
+
+        # Assert
+        assert (patched, changes) == (bytes(data), ())
 
     def test_a_request_that_keeps_the_dedither_switch_installs_nothing(self):
         # Arrange

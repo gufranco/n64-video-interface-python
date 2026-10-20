@@ -22,7 +22,10 @@ OP_ANDI, OP_LUI, OP_LW, OP_SW = 0x0C, 0x0F, 0x23, 0x2B
 WRITES_RT = frozenset({*range(0x08, 0x10), *range(0x20, 0x28)})
 FUNCT_OR = 0x25
 AA_SHIFT = 8
-ALWAYS = OP_BEQ << 10
+OP_ORI = 0x0D
+POINT_SAMPLE = 0x0200
+NOP = 0
+TARGET_REACH = 0x8000
 Change = tuple[int, int, int]
 
 
@@ -31,16 +34,13 @@ class Site:
     store: int
     value: int
     base: int
+    moved: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Mask:
     keep: int
     point_sample: bool
-
-    @property
-    def words(self) -> int:
-        return 7 if self.point_sample else 3
 
 
 def _word(data: bytes, at: int) -> int:
@@ -67,16 +67,35 @@ def _last_write(data: bytes, at: int, register: int) -> int | None:
     return None
 
 
+def _targeted(data: bytes, at: int) -> bool:
+    window = range(max(0, at - TARGET_REACH), min(len(data) - 3, at + TARGET_REACH), 4)
+    return any(
+        _is_branch(_word(data, source))
+        and _word(data, source) >> 26 not in (OP_J, OP_JAL, 0)
+        and branch_target(source, _word(data, source)) == at
+        for source in window
+    )
+
+
+def _reads(word: int, register: int) -> bool:
+    return register in ((word >> 21) & REGISTER, (word >> 16) & REGISTER)
+
+
 def _site_at(data: bytes, store: int) -> Site | None:
     word = _word(data, store)
     value, base = (word >> 16) & REGISTER, (word >> 21) & REGISTER
     after = _word(data, store + 4)
-    if _is_branch(_word(data, store - 4)) or _is_branch(after) or _written(after) in (value, base):
+    move = _written(after) in (value, base)
+    if _is_branch(_word(data, store - 4)) or _is_branch(after) or (move and _reads(after, value)):
         return None
     load, origin = _last_write(data, store, value), _last_write(data, store, base)
     if load is None or load >> 26 != OP_LW or load & HALF != CONTROL_FIELD:
         return None
-    return Site(store, value, base) if origin == (OP_LUI << 26) | (base << 16) | VI_BASE else None
+    if origin != (OP_LUI << 26) | (base << 16) | VI_BASE or _targeted(data, store):
+        return None
+    if move and _targeted(data, store + 4):
+        return None
+    return Site(store, value, base, after if move else None)
 
 
 def find_sites(data: bytes) -> tuple[Site, ...]:
@@ -123,28 +142,55 @@ def _branch(at: int, target: int) -> int:
     return (OP_BEQ << 26) | (((target - at - 4) >> 2) & HALF)
 
 
-def _filter(site: Site, mask: Mask, cave: int) -> tuple[int, ...]:
+def _tail(site: Site, at: int, store: int) -> tuple[int, ...]:
+    if site.moved is None:
+        return _branch(at, site.store + 8), store
+    return store, _branch(at + 4, site.store + 8), site.moved
+
+
+def _forms(site: Site, mask: Mask, cave: int) -> list[tuple[int, ...]]:
     clear = (OP_ANDI << 26) | (site.value << 21) | (site.value << 16) | mask.keep
     store = (OP_SW << 26) | (site.base << 21) | (site.value << 16)
     if not mask.point_sample:
-        return clear, _branch(cave + 4, site.store + 8), store
+        return [(clear, *_tail(site, cave + 4, store))]
     pixel = (OP_ANDI << 26) | (site.value << 21) | (site.base << 16) | CTRL_TYPE_MASK
     shift = (site.base << 16) | (site.base << 11) | (AA_SHIFT << 6)
     merge = (site.value << 21) | (site.base << 16) | (site.value << 11) | FUNCT_OR
     restore = (OP_LUI << 26) | (site.base << 16) | VI_BASE
-    return clear, pixel, shift, merge, restore, _branch(cave + 20, site.store + 8), store
+    resample = (OP_ORI << 26) | (site.value << 21) | (site.value << 16) | POINT_SAMPLE
+    return [
+        (clear, pixel, shift, merge, restore, *_tail(site, cave + 20, store)),
+        (clear, resample, *_tail(site, cave + 8, store)),
+    ]
 
 
 def _reachable(site: Site, cave: int) -> bool:
     return abs((cave - site.store - 4) >> 2) <= REACH and abs((site.store + 8 - cave) >> 2) <= REACH
 
 
-def _writes(site: Site, mask: Mask, cave: int) -> list[tuple[int, int]]:
-    body = enumerate(_filter(site, mask, cave))
-    return [
-        (site.store, _branch(site.store, cave)),
-        *((cave + 4 * index, value) for index, value in body),
-    ]
+def _writes(site: Site, body: tuple[int, ...], cave: int) -> list[tuple[int, int]]:
+    entry = [(site.store, _branch(site.store, cave))]
+    entry.extend([(site.store + 4, NOP)] if site.moved is not None else [])
+    return [*entry, *((cave + 4 * index, value) for index, value in enumerate(body))]
+
+
+def _plan(
+    sites: Sequence[Site], caves: Sequence[tuple[int, int]], mask: Mask
+) -> list[tuple[int, int]]:
+    free = list(caves)
+    writes: list[tuple[int, int]] = []
+    for site in sites:
+        options = [
+            (index, body)
+            for index, (start, end) in enumerate(free)
+            if _reachable(site, start)
+            for body in _forms(site, mask, start)
+            if len(body) * 4 <= end - start
+        ]
+        if options:
+            index, body = options[0]
+            writes.extend(_writes(site, body, free.pop(index)[0]))
+    return writes
 
 
 def install(
@@ -152,14 +198,8 @@ def install(
 ) -> tuple[bytes, tuple[Change, ...]]:
     if mask is None:
         return data, ()
-    usable = [start for start, end in caves if (end - start) // 4 >= mask.words]
-    pairs = zip(find_sites(data), usable, strict=False)
-    writes = [
-        write
-        for site, cave in pairs
-        if _reachable(site, cave)
-        for write in _writes(site, mask, cave)
-    ]
+    unreached = [c for c in caves if not any(_targeted(data, at) for at in range(c[0], c[1], 4))]
+    writes = _plan(find_sites(data), unreached, mask)
     out = bytearray(data)
     changes = tuple((offset, _word(data, offset), value) for offset, value in writes)
     for offset, value in writes:
