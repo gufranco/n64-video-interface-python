@@ -1,6 +1,8 @@
 import struct
 
-from n64_video_interface.conftest import mode_entry, routine
+import pytest
+
+from n64_video_interface.conftest import make_rom, mode_entry, routine
 from n64_video_interface.edits import NO_TABLE, Settings, describe, edit_region
 
 SWAP_AT = 0x380
@@ -66,6 +68,24 @@ class TestDescribing:
             f"{NO_TABLE_TEXT}, 1 VI control constant changed",
             bytes.fromhex("2409320a"),
         )
+
+
+class TestIntegrityCheckedTitles:
+    @pytest.mark.parametrize(
+        ("cart", "expected"), [("AL", 0x3C010000), ("ZZ", 0x3C010001)], ids=["checked", "other"]
+    )
+    def test_a_dedither_setter_is_cleared_only_where_the_filter_cannot_go(self, cart, expected):
+        # Arrange
+        rom = bytearray(make_rom(size=0x2000, cart=cart))
+        blob, _ = routine(("dedither",))
+        rom[0x1000 : 0x1000 + len(blob)] = blob
+        struct.pack_into(">4I", rom, 0x1200, 0x8C4E0004, 0x3C010001, 0x01C17825, 0xAC4F0004)
+
+        # Act
+        edit = edit_region(bytes(rom), Settings(dither_filter=False))
+
+        # Assert
+        assert struct.unpack_from(">I", edit.data, 0x1204)[0] == expected
 
 
 class TestTheControlFilter:

@@ -206,7 +206,7 @@ class Linker:
         return (OP_J << 26) | (((self.base + target) >> 2) & JUMP_FIELD)
 
 
-def _integrity_checked(data: bytes) -> bool:
+def integrity_checked(data: bytes) -> bool:
     return data[:4] == ROM_MAGIC and data[GAME_CODE] in INTEGRITY_CHECKED
 
 
@@ -303,7 +303,7 @@ def _plan(
 def install(
     data: bytes, caves: Sequence[tuple[int, int]], mask: Mask | None
 ) -> tuple[bytes, tuple[Change, ...], int]:
-    if mask is None or _integrity_checked(data):
+    if mask is None or integrity_checked(data):
         return data, (), 0
     unreached = [
         c

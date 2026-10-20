@@ -11,6 +11,8 @@ REGISTER = 31
 HALF = 0xFFFF
 SIGN = 0x8000
 UPPER = 0xFFFF0000
+MODE_CONTROL = 4
+BUILT_IN = 0x10010
 Change = tuple[int, int, int]
 
 if TYPE_CHECKING:
@@ -60,10 +62,8 @@ def _rewrite(data: bytes, places: tuple[int, ...], value: int) -> tuple[Change, 
     )
 
 
-def _constant(data: bytes, store: int, settings: Settings) -> tuple[Change, ...]:
-    _, base, value = _fields(_word(data, store))
-    places = _source(data, store, value) if _based(data, store, base) else None
-    if places is None or not plausible(_value(data, places)):
+def _changed(data: bytes, places: tuple[int, ...], settings: Settings) -> tuple[Change, ...]:
+    if not plausible(_value(data, places)):
         return ()
     changed = apply_changes(
         _value(data, places), dither_filter=settings.dither_filter, **settings.table
@@ -71,10 +71,31 @@ def _constant(data: bytes, store: int, settings: Settings) -> tuple[Change, ...]
     return _rewrite(data, places, changed) or ()
 
 
+def _register(data: bytes, store: int, settings: Settings) -> tuple[Change, ...]:
+    _, base, value = _fields(_word(data, store))
+    places = _source(data, store, value) if _based(data, store, base) else None
+    return () if places is None else _changed(data, places, settings)
+
+
+def _mode(data: bytes, store: int, settings: Settings) -> tuple[Change, ...]:
+    places = _source(data, store, _fields(_word(data, store))[2])
+    if places is None or len(places) == 1 or not _value(data, places) & BUILT_IN:
+        return ()
+    return _changed(data, places, settings)
+
+
 def find_constants(data: bytes, settings: Settings) -> tuple[Change, ...]:
     stores = (
         at
         for at in range(4, len(data) - 3, 4)
-        if _word(data, at) >> 26 == OP_SW and _word(data, at) & HALF == 0
+        if _word(data, at) >> 26 == OP_SW and _word(data, at) & HALF in (0, MODE_CONTROL)
     )
-    return tuple(change for store in stores for change in _constant(data, store, settings))
+    return tuple(
+        change
+        for store in stores
+        for change in (
+            _register(data, store, settings)
+            if _word(data, store) & HALF == 0
+            else _mode(data, store, settings)
+        )
+    )

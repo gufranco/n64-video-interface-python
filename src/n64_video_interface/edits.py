@@ -153,7 +153,7 @@ def edit_region(data: bytes, settings: Settings) -> RegionEdit:
 def _hal_changes(
     data: bytes, settings: Settings, requests: Sequence[SwitchRequest]
 ) -> tuple[Change, ...]:
-    guarded = {request.switch for request in requests}
+    guarded = set() if vifilter.integrity_checked(data) else {r.switch for r in requests}
     bits = {
         bit
         for switch, name, bit in HAL_BITS

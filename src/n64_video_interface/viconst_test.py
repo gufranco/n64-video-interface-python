@@ -36,8 +36,12 @@ class TestFinding:
                 (LUI_V0_VI, LUI_T1_ONE, ORI_T1_T1, SW_T1_V0),
                 ((0x44, LUI_T1_ONE, 0x3C090000), (0x48, ORI_T1_T1, 0x35293202)),
             ),
+            (
+                (LUI_T1_ONE, 0x35290016, 0xAC890004),
+                ((0x40, LUI_T1_ONE, 0x3C090000), (0x44, 0x35290016, 0x35290202)),
+            ),
         ],
-        ids=["addiu", "ori", "store in a delay slot", "lui and ori"],
+        ids=["addiu", "ori", "store in a delay slot", "lui and ori", "mode built in memory"],
     )
     def test_a_constant_stored_to_the_control_register_is_rewritten(self, words, expected):
         # Arrange
@@ -59,6 +63,7 @@ class TestFinding:
             (LUI_V0_VI, ADDIU_T1_LAN1, 0xAC490004),
             (LUI_V0_VI, 0x3409320A, SW_T1_V0),
             (LUI_V0_VI, SW_T1_V0),
+            (0x3C090000, 0x35293202, 0xAC890004),
         ],
         ids=[
             "another register block",
@@ -68,6 +73,7 @@ class TestFinding:
             "another register",
             "already off",
             "value set elsewhere",
+            "mode without built-in features",
         ],
     )
     def test_anything_else_is_left_alone(self, words):
