@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 
-from . import bitlz
+from . import bitlz, rewindow
 from .bitlz import Copy, Literals, Token, expand, span, split
 from .edits import NO_TARGETS, Packed, RegionEdit, Settings, edit_region
 
@@ -17,7 +17,6 @@ BYTE = 0xFF
 BYTE_BITS = 8
 COPY_BYTES = 3
 CANDIDATES = 32
-IMPROVE_WINDOW = 0x4000
 UNREACHED = 1 << 62
 NOUN = "byte-coded segment"
 NO_ROOM = "a changed byte-coded segment no longer fits where it was"
@@ -127,35 +126,6 @@ def optimal(data: bytes, start: int, end: int) -> tuple[Token, ...]:
     return _trace(back, data, start)
 
 
-def _windows(tokens: Sequence[Token]) -> list[tuple[int, int, int, int]]:
-    windows: list[tuple[int, int, int, int]] = []
-    index, position = 0, 0
-    while index < len(tokens):
-        end, stop = index, position
-        while end < len(tokens) and stop - position < IMPROVE_WINDOW:
-            stop += span(tokens[end])
-            end += 1
-        windows.append((index, end, position, stop))
-        index, position = end, stop
-    return windows
-
-
-def improve(
-    tokens: Sequence[Token], desired: bytes, before: bytes, target: int
-) -> tuple[Token, ...]:
-    windows = _windows(tokens)
-    parts = [tuple(tokens[first:end]) for first, end, _, _ in windows]
-    total = sum(map(cost, tokens))
-    changed = [i for i, (_, _, a, b) in enumerate(windows) if desired[a:b] != before[a:b]]
-    for i in [*changed, *(i for i in range(len(windows)) if i not in changed)]:
-        if i not in changed and total <= target:
-            break
-        fresh = optimal(desired, windows[i][2], windows[i][3])
-        saving = sum(map(cost, parts[i])) - sum(map(cost, fresh))
-        parts[i], total = (fresh, total - saving) if saving > 0 else (parts[i], total)
-    return tuple(token for part in parts for token in part)
-
-
 def find_segments(rom: bytes) -> tuple[bitlz.Segment, ...]:
     return bitlz.find_segments(rom, bitlz.BYTE_CODED)
 
@@ -173,7 +143,10 @@ def _edited(
     if not edit.changes:
         return None
     target = sum(map(cost, tokens))
-    body = encode(improve(split(tokens, edit.data), edit.data, before, target), data[:HEADER])
+    improved = rewindow.improve(
+        split(tokens, edit.data), edit.data, before, target, optimal=optimal, cost=cost
+    )
+    body = encode(improved, data[:HEADER])
     return (
         NO_ROOM if len(body) > segment.packed else (body + bytes(segment.packed - len(body)), edit)
     )
