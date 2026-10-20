@@ -14,6 +14,7 @@ CRC_BIN_AT = 0x5E78
 NEXT_AT = GROUP_AT + 0x8000
 ALIGN = 16
 NOISE = random.Random(64).randbytes(0x1000)
+SHORT_MAGIC = b"\x11\x73"
 
 
 def deflate(data):
@@ -23,6 +24,10 @@ def deflate(data):
 
 def stream(data):
     return rarezip.MAGIC + struct.pack(">I", len(data)) + deflate(data)
+
+
+def short_stream(data):
+    return SHORT_MAGIC + len(data).to_bytes(3, "big") + deflate(data)
 
 
 def code_block():
@@ -42,9 +47,9 @@ def tight_rom():
     return reseal(bytes(data), "6102")
 
 
-def rom_with_group(*, crc_bin=True):
+def rom_with_group(*, crc_bin=True, pack=stream):
     data = bytearray(make_rom(size=SEALABLE_SIZE + GROUP_AT))
-    group = stream(code_block()) + stream(data_block())
+    group = pack(code_block()) + pack(data_block())
     data[GROUP_AT : GROUP_AT + len(group)] = group
     tail = stream(bytes(0x40))
     data[NEXT_AT : NEXT_AT + len(tail)] = tail
@@ -81,6 +86,18 @@ class TestFindingStreams:
         # Assert
         assert [(g.start, g.end, [s.data for s in g.streams]) for g in groups[:1]] == [
             (GROUP_AT, NEXT_AT, [code_block(), data_block()])
+        ]
+
+    def test_a_stream_with_a_three_byte_size_is_found(self):
+        # Arrange
+        rom = bytes(0x100) + short_stream(data_block()) + bytes(0x40)
+
+        # Act
+        groups = rarezip.find_groups(rom)
+
+        # Assert
+        assert [(s.start, s.magic, s.data) for s in groups[0].streams] == [
+            (0x100, SHORT_MAGIC, data_block())
         ]
 
     @pytest.mark.parametrize(
@@ -152,6 +169,27 @@ class TestThePatch:
             (*rarezip.bk_crc(code), *rarezip.bk_crc(data)),
             bytes.fromhex("0000321e"),
             True,
+        )
+
+    def test_a_group_with_three_byte_sizes_needs_no_checksum_and_keeps_its_header(self):
+        # Arrange
+        rom = rom_with_group(crc_bin=False, pack=short_stream)
+
+        # Act
+        result = rarezip.patch(rom, Settings(antialiasing=False, dither_filter=False))
+
+        # Assert
+        data = rarezip.find_groups(result.data)[0].streams[1]
+        assert (
+            result.applied,
+            data.magic,
+            data.data[0x84:0x88],
+            result.data[GROUP_AT : GROUP_AT + 5],
+        ) == (
+            True,
+            SHORT_MAGIC,
+            bytes.fromhex("0000321e"),
+            SHORT_MAGIC + len(code_block()).to_bytes(3, "big"),
         )
 
     def test_a_group_whose_checksum_cannot_be_found_is_refused(self):

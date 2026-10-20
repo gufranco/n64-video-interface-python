@@ -20,7 +20,8 @@ from .edits import (
 from .seal import reseal
 
 MAGIC = b"\x11\x72"
-HEADER = 6
+SIZE_WIDTHS = {MAGIC: 4, b"\x11\x73": 3}
+MAGIC_PATTERN = re.compile(rb"\x11[\x72\x73]")
 WINDOW = 0x200000
 MIN_SIZE = 0x40
 MAX_SIZE = 0x800000
@@ -42,6 +43,7 @@ class Stream:
     start: int
     end: int
     data: bytes
+    magic: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,13 +61,19 @@ def bk_crc(data: bytes) -> tuple[int, int]:
     return total, mixed
 
 
+def _header(magic: bytes, size: int) -> bytes:
+    return magic + size.to_bytes(SIZE_WIDTHS[magic], "big")
+
+
 def _stream_at(rom: bytes, at: int) -> Stream | None:
-    if at + HEADER > len(rom):
+    magic = rom[at : at + 2]
+    header = len(magic) + SIZE_WIDTHS[magic]
+    if at + header > len(rom):
         return None
-    size = struct.unpack_from(">I", rom, at + 2)[0]
+    size = int.from_bytes(rom[at + len(magic) : at + header], "big")
     if not MIN_SIZE <= size <= MAX_SIZE:
         return None
-    window = memoryview(rom)[at + HEADER : at + HEADER + WINDOW]
+    window = memoryview(rom)[at + header : at + header + WINDOW]
     inflater = zlib.decompressobj(RAW_DEFLATE)
     try:
         data = inflater.decompress(window, size + 1)
@@ -73,16 +81,16 @@ def _stream_at(rom: bytes, at: int) -> Stream | None:
         return None
     if not inflater.eof or len(data) != size:
         return None
-    return Stream(at, at + HEADER + len(window) - len(inflater.unused_data), data)
+    return Stream(at, at + header + len(window) - len(inflater.unused_data), data, magic)
 
 
 def _streams(rom: bytes) -> list[Stream]:
     found: list[Stream] = []
-    at = rom.find(MAGIC)
-    while at >= 0:
-        stream = _stream_at(rom, at)
+    match = MAGIC_PATTERN.search(rom)
+    while match:
+        stream = _stream_at(rom, match.start())
         found.extend([stream] if stream else [])
-        at = rom.find(MAGIC, stream.end if stream else at + 1)
+        match = MAGIC_PATTERN.search(rom, stream.end if stream else match.start() + 1)
     return found
 
 
@@ -116,7 +124,10 @@ def _deflate(data: bytes) -> bytes:
 
 
 def repack(group: Group, contents: Sequence[bytes]) -> bytes | None:
-    packed = b"".join(MAGIC + struct.pack(">I", len(data)) + _deflate(data) for data in contents)
+    packed = b"".join(
+        _header(stream.magic, len(data)) + _deflate(data)
+        for stream, data in zip(group.streams, contents, strict=True)
+    )
     padded = packed + bytes(-len(packed) % ALIGN)
     span = group.end - group.start
     return padded + bytes(span - len(padded)) if len(padded) <= span else None
@@ -124,7 +135,11 @@ def repack(group: Group, contents: Sequence[bytes]) -> bytes | None:
 
 def _with_checksums(rom: bytes, group: Group, edits: Sequence[RegionEdit]) -> bytes | None:
     out = bytearray(rom)
-    changed = [(s, e) for s, e in zip(group.streams, edits, strict=True) if e.data != s.data]
+    changed = [
+        (s, e)
+        for s, e in zip(group.streams, edits, strict=True)
+        if e.data != s.data and s.magic == MAGIC
+    ]
     for stream, edit in changed:
         at = rom.find(struct.pack(">2I", *bk_crc(stream.data)))
         if at < 0:
