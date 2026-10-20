@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import fields, replace
 
-from . import bitlz, gzmember, lzss, rarezip, refpack, rnc
+from . import bitlz, bytelz, gzmember, lzss, rarezip, refpack, rnc
 from .byteorder import swap, to_big_endian
 from .checksum import verify
 from .edits import (
@@ -43,6 +43,7 @@ PACKERS = (
     rarezip.edit_groups,
     rnc.edit_streams,
     bitlz.edit_segments,
+    bytelz.edit_segments,
     refpack.edit_streams,
     gzmember.edit_members,
     lzss.edit_segments,

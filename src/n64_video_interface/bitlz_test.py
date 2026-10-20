@@ -216,6 +216,19 @@ class TestPatching:
             bytes.fromhex("0000321e"),
         )
 
+    def test_a_record_whose_size_does_not_hold_does_not_stop_the_search(self):
+        # Arrange
+        rom = bytearray(rom_with_table(entry_block()))
+        decoy = TABLE_AT - 0x100
+        rom[decoy : decoy + 12] = struct.pack(">3I", 0x10, 0, 0x80000001)
+        rom[decoy + 0x10] = bitlz.FORMAT_BYTE
+
+        # Act
+        segments = bitlz.find_segments(bytes(rom))
+
+        # Assert
+        assert [segment.at for segment in segments] == [TABLE_AT + 12]
+
     def test_a_segment_that_does_not_decode_is_skipped(self):
         # Arrange
         rom = bytearray(rom_with_table(entry_block(), entry_block()))

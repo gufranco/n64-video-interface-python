@@ -8,6 +8,8 @@ from itertools import takewhile
 from .edits import NO_TARGETS, Packed, RegionEdit, Settings, edit_region
 
 FORMAT_BYTE = 3
+BYTE_CODED = 1
+FORMATS = (BYTE_CODED, FORMAT_BYTE)
 HEADER = 5
 BLOCK = 0x1000
 WINDOW = 0x10000
@@ -395,22 +397,25 @@ def _records(rom: bytes, table: int) -> list[tuple[int, int, int]]:
     return chained
 
 
-def _table_at(rom: bytes, table: int) -> tuple[Segment, ...]:
+def _table_at(rom: bytes, table: int, kind: int) -> tuple[Segment, ...] | None:
     offset, _, stored = RECORD.unpack_from(rom, table)
-    if not stored & COMPRESSED or not 0 < offset < BLOCK or rom[table + offset] != FORMAT_BYTE:
-        return ()
+    if not stored & COMPRESSED or not 0 < offset < BLOCK or rom[table + offset] not in FORMATS:
+        return None
+    records = _records(rom, table)
+    if not records:
+        return None
     return tuple(
         Segment(table + at, size, stored & SIZE_MASK)
-        for at, size, stored in _records(rom, table)
-        if stored & COMPRESSED and rom[table + at] == FORMAT_BYTE
+        for at, size, stored in records
+        if stored & COMPRESSED and rom[table + at] == kind
     )
 
 
-def find_segments(rom: bytes) -> tuple[Segment, ...]:
+def find_segments(rom: bytes, kind: int = FORMAT_BYTE) -> tuple[Segment, ...]:
     for table in TABLE_SEARCH:
         if table + RECORD.size <= len(rom):
-            found = _table_at(rom, table)
-            if found:
+            found = _table_at(rom, table, kind)
+            if found is not None:
                 return found
     return ()
 
