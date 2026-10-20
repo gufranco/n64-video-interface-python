@@ -110,11 +110,13 @@ def _edited(
 
 def edit_chains(rom: bytes, settings: Settings) -> Packed | str:
     done: tuple[RegionEdit, ...] = ()
+    spans: tuple[tuple[int, int], ...] = ()
     out, refusal, count = rom, NO_TARGETS, 0
     for chain in find_chains(rom):
         result = _edited(rom, chain, settings)
         if isinstance(result, tuple):
             out = out[: chain.start] + result[0] + out[chain.end :]
+            spans = (*spans, (chain.start, chain.end))
             done, count = (*done, *result[1]), count + 1
         refusal = result if isinstance(result, str) else refusal
-    return Packed(out, done, count, NOUN) if count else refusal
+    return Packed(out, done, count, NOUN, spans) if count else refusal

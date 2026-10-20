@@ -330,11 +330,13 @@ def _edited(stream: Stream, settings: Settings) -> tuple[bytes, RegionEdit] | st
 
 def edit_streams(rom: bytes, settings: Settings) -> Packed | str:
     done: tuple[RegionEdit, ...] = ()
+    spans: tuple[tuple[int, int], ...] = ()
     out, refusal = rom, NO_TARGETS
     for stream in find_streams(rom):
         result = _edited(stream, settings)
         if isinstance(result, tuple):
             out = out[: stream.at] + result[0] + out[stream.at + stream.length :]
+            spans = (*spans, (stream.at, stream.at + stream.length))
             done = (*done, result[1])
         refusal = result if isinstance(result, str) else refusal
-    return Packed(out, done, len(done), NOUN) if done else refusal
+    return Packed(out, done, len(done), NOUN, spans) if done else refusal

@@ -75,6 +75,7 @@ class PatchResult:
     modes_changed: int = 0
     changes: tuple[Change, ...] = ()
     cic: str | None = None
+    spans: tuple[tuple[int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,7 @@ class Packed:
     edits: tuple[RegionEdit, ...]
     count: int
     noun: str
+    spans: tuple[tuple[int, int], ...] = ()
 
     @property
     def where(self) -> str:

@@ -176,11 +176,13 @@ def _edited(rom: bytes, file: File, settings: Settings) -> tuple[bytes, RegionEd
 
 def edit_files(rom: bytes, settings: Settings) -> Packed | str:
     done: tuple[RegionEdit, ...] = ()
+    spans: tuple[tuple[int, int], ...] = ()
     out, refusal = rom, NO_TARGETS
     for file in find_files(rom):
         result = _edited(rom, file, settings)
         if isinstance(result, tuple):
             out = out[: file.at] + result[0] + out[file.at + file.packed :]
+            spans = (*spans, (file.at, file.at + file.packed))
             done = (*done, result[1])
         refusal = result if isinstance(result, str) else refusal
-    return Packed(out, done, len(done), NOUN) if done else refusal
+    return Packed(out, done, len(done), NOUN, spans) if done else refusal

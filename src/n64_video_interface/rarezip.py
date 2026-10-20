@@ -36,6 +36,9 @@ NO_CHECKSUM = "a changed block's integrity checksum could not be located, so it 
 NO_ROOM = "a changed block no longer fits where it was"
 NOUN = "compressed group"
 NONZERO = re.compile(rb"[^\x00]")
+CRC_PAIR = struct.Struct(">2I")
+Span = tuple[int, int]
+Sealed = tuple[bytes, tuple[Span, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,29 +136,32 @@ def repack(group: Group, contents: Sequence[bytes]) -> bytes | None:
     return padded + bytes(span - len(padded)) if len(padded) <= span else None
 
 
-def _with_checksums(rom: bytes, group: Group, edits: Sequence[RegionEdit]) -> bytes | None:
+def _with_checksums(rom: bytes, group: Group, edits: Sequence[RegionEdit]) -> Sealed | None:
     out = bytearray(rom)
     changed = [
         (s, e)
         for s, e in zip(group.streams, edits, strict=True)
         if e.data != s.data and s.magic == MAGIC
     ]
+    spans: list[Span] = []
     for stream, edit in changed:
-        at = rom.find(struct.pack(">2I", *bk_crc(stream.data)))
+        at = rom.find(CRC_PAIR.pack(*bk_crc(stream.data)))
         if at < 0:
             return None
-        struct.pack_into(">2I", out, at, *bk_crc(edit.data))
-    return bytes(out)
+        CRC_PAIR.pack_into(out, at, *bk_crc(edit.data))
+        spans.append((at, at + CRC_PAIR.size))
+    return bytes(out), tuple(spans)
 
 
-def _repacked(rom: bytes, group: Group, edits: Sequence[RegionEdit]) -> bytes | str:
+def _repacked(rom: bytes, group: Group, edits: Sequence[RegionEdit]) -> Sealed | str:
     packed = repack(group, [edit.data for edit in edits])
     if packed is None:
         return NO_ROOM
     sealed = _with_checksums(rom, group, edits)
     if sealed is None:
         return NO_CHECKSUM
-    return sealed[: group.start] + packed + sealed[group.end :]
+    data, spans = sealed
+    return data[: group.start] + packed + data[group.end :], ((group.start, group.end), *spans)
 
 
 def edit_groups(rom: bytes, settings: Settings) -> Packed | str:
@@ -164,14 +170,16 @@ def edit_groups(rom: bytes, settings: Settings) -> Packed | str:
     if not targeted:
         return NO_TARGETS
     done: tuple[RegionEdit, ...] = ()
+    spans: tuple[Span, ...] = ()
     out, groups, refusal = rom, 0, NO_TARGETS
     for group, edits in targeted:
         result = _repacked(out, group, edits)
         if isinstance(result, str):
             refusal = result
             continue
-        out, done, groups = result, (*done, *edits), groups + 1
-    return Packed(out, done, groups, NOUN) if groups else refusal
+        out, done, groups = result[0], (*done, *edits), groups + 1
+        spans = (*spans, *result[1])
+    return Packed(out, done, groups, NOUN, spans) if groups else refusal
 
 
 def patch(rom: bytes, settings: Settings) -> PatchResult:

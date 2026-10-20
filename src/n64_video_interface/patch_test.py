@@ -18,7 +18,7 @@ from n64_video_interface.patch import (
     safe_patch,
 )
 from n64_video_interface.rarezip import NO_CHECKSUM
-from n64_video_interface.rarezip_test import rom_with_group
+from n64_video_interface.rarezip_test import CRC_BIN_AT, GROUP_AT, NEXT_AT, rom_with_group
 from n64_video_interface.rdp_test import TEXT_BASE, microcode_rom
 from n64_video_interface.seal import reseal
 
@@ -255,6 +255,22 @@ class TestCompressedCode:
             "1 of 1 mode entries changed, in 1 compressed group",
             (True, "6102"),
         )
+
+    def test_every_byte_a_compressed_patch_moves_is_in_a_reported_span(self):
+        # Arrange
+        rom = rom_with_group()
+
+        # Act
+        result = safe_patch(rom, antialiasing=False)
+
+        # Assert
+        allowed = {i for start, end in result.spans for i in range(start, end)}
+        moved = {i for i in range(len(rom)) if rom[i] != result.data[i]}
+        assert (
+            result.spans[0],
+            moved - allowed <= set(range(0x10, 0x18)),
+            any(start >= CRC_BIN_AT for start, _ in result.spans[1:]),
+        ) == ((GROUP_AT, NEXT_AT), True, True)
 
     def test_direct_targets_are_patched_when_the_compressed_group_cannot_be(self):
         # Arrange

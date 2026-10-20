@@ -445,11 +445,13 @@ def _edited(
 
 def edit_segments(rom: bytes, settings: Settings) -> Packed | str:
     done: tuple[RegionEdit, ...] = ()
+    spans: tuple[tuple[int, int], ...] = ()
     out, refusal = rom, NO_TARGETS
     for segment in find_segments(rom):
         result = _edited(rom, segment, settings)
         if isinstance(result, tuple):
             out = out[: segment.at] + result[0] + out[segment.body.stop :]
+            spans = (*spans, (segment.at, segment.body.stop))
             done = (*done, result[1])
         refusal = result if isinstance(result, str) else refusal
-    return Packed(out, done, len(done), NOUN) if done else refusal
+    return Packed(out, done, len(done), NOUN, spans) if done else refusal

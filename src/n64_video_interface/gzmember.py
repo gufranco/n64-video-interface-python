@@ -159,11 +159,13 @@ def _edited(member: Member, settings: Settings) -> tuple[bytes, RegionEdit] | st
 
 def edit_members(rom: bytes, settings: Settings) -> Packed | str:
     done: tuple[RegionEdit, ...] = ()
+    spans: tuple[tuple[int, int], ...] = ()
     out, refusal = rom, NO_TARGETS
     for member in find_members(rom):
         result = _edited(member, settings)
         if isinstance(result, tuple):
             out = out[: member.at] + result[0] + out[member.at + member.length :]
+            spans = (*spans, (member.at, member.at + member.length))
             done = (*done, result[1])
         refusal = result if isinstance(result, str) else refusal
-    return Packed(out, done, len(done), NOUN) if done else refusal
+    return Packed(out, done, len(done), NOUN, spans) if done else refusal

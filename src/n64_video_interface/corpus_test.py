@@ -84,6 +84,7 @@ def outcome(data, result):
         return ("refused", result.reason in KNOWN_REFUSALS)
     before, after = big_endian(data), big_endian(result.data)
     edited = {offset + i for offset, _, _ in result.changes for i in range(4)}
+    edited |= {i for start, end in result.spans for i in range(start, end)}
     moved = {i for i in range(len(before)) if before[i] != after[i]}
     resealed = checksum.verify(after) == (True, result.cic)
     return ("applied", resealed and moved <= edited | CHECKSUM_WORDS)

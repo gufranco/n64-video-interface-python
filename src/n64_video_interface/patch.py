@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import fields, replace
+from dataclasses import dataclass, fields, replace
 
 from . import (
     bitlz,
@@ -92,18 +92,26 @@ def _nothing_reason(edits: Sequence[RegionEdit], settings: Settings) -> str:
     return NO_CHANGE_NEEDED
 
 
-def _compressed(
-    data: bytes, settings: Settings
-) -> tuple[bytes, tuple[RegionEdit, ...], tuple[str, ...]]:
+@dataclass(frozen=True, slots=True)
+class Repacked:
+    data: bytes
+    edits: tuple[RegionEdit, ...]
+    notes: tuple[str, ...]
+    spans: tuple[tuple[int, int], ...]
+
+
+def _compressed(data: bytes, settings: Settings) -> Repacked:
     edits: tuple[RegionEdit, ...] = ()
     notes: tuple[str, ...] = ()
+    spans: tuple[tuple[int, int], ...] = ()
     for packer in PACKERS:
         packed = packer(data, settings)
         if isinstance(packed, Packed):
             data, edits, notes = packed.data, (*edits, *packed.edits), (*notes, packed.where)
+            spans = (*spans, *packed.spans)
         elif packed != NO_TARGETS:
             notes = (*notes, f"compressed code left alone: {packed}")
-    return data, edits, notes
+    return Repacked(data, edits, notes, spans)
 
 
 def _patch_big_endian(rom: bytes, settings: Settings) -> PatchResult:
@@ -111,16 +119,17 @@ def _patch_big_endian(rom: bytes, settings: Settings) -> PatchResult:
     if refusal is not None:
         return PatchResult(False, refusal)
     direct = edit_region(rom, settings)
-    data, packed, notes = _compressed(direct.data, settings)
-    edits = (direct, *packed)
+    packed = _compressed(direct.data, settings)
+    edits = (direct, *packed.edits)
     if not any(edit.changes for edit in edits):
         return PatchResult(False, _nothing_reason(edits, settings))
     valid, cic = verify(rom)
     if not valid or cic is None:
         return PatchResult(False, CHECKSUM_UNKNOWN)
     modes = sum(edit.modes_changed for edit in edits)
-    reason = ", ".join((describe(edits, settings), *notes))
-    return PatchResult(True, reason, reseal(data, cic), modes, direct.changes, cic)
+    reason = ", ".join((describe(edits, settings), *packed.notes))
+    sealed = reseal(packed.data, cic)
+    return PatchResult(True, reason, sealed, modes, direct.changes, cic, packed.spans)
 
 
 def safe_patch(
