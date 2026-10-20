@@ -111,14 +111,16 @@ def _straight(data: bytes, start: int, end: int) -> bool:
 
 def _feeds(data: bytes, store: int, value: int, base: int) -> int | None:
     load, origin = _last_write(data, store, value), _last_write(data, store, base, BASE_LOOKBACK)
-    if origin is not None and store - origin > 4 * LOOKBACK and not _straight(data, origin, store):
-        return None
     if load is None or origin is None:
         return None
     loaded, based = _word(data, load), _word(data, origin)
     if loaded >> 26 != OP_LW or loaded & HALF != CONTROL_FIELD:
         return None
-    return load if based == (OP_LUI << 26) | (base << 16) | VI_BASE else None
+    if based != (OP_LUI << 26) | (base << 16) | VI_BASE:
+        return None
+    if store - origin > 4 * LOOKBACK and not _straight(data, origin, store):
+        return None
+    return load
 
 
 def _load_site(data: bytes, store: int, value: int, base: int, load: int) -> Site | None:
