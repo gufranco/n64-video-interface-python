@@ -1,5 +1,9 @@
+import struct
+
 from n64_video_interface.conftest import mode_entry, routine
 from n64_video_interface.edits import Settings, describe, edit_region
+
+SWAP_AT = 0x380
 
 
 class TestEditingARegion:
@@ -45,3 +49,24 @@ class TestDescribing:
 
         # Assert
         assert text == "1 of 1 mode entries changed, 1 dedither request neutralised"
+
+
+class TestTheControlFilter:
+    def test_a_free_dedither_block_carries_the_control_filter(self):
+        # Arrange
+        blob, _ = routine(("dedither",), skip=9)
+        region = bytearray(blob)
+        swap = (0x3C0DA440, 0x8E28000C, 0xADA80000, 0x8DEF5A20)
+        for index, value in enumerate(swap):
+            struct.pack_into(">I", region, SWAP_AT + index * 4, value)
+        settings = Settings(antialiasing=False, dither_filter=False)
+
+        # Act
+        edit = edit_region(bytes(region), settings)
+
+        # Assert
+        assert (edit.filters, describe([edit], settings)) == (
+            1,
+            "no video mode table could be proven present, so anti-aliasing and the table "
+            "settings are unchanged, 1 dedither request neutralised, 1 VI control store filtered",
+        )

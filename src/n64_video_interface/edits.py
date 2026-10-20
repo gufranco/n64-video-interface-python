@@ -4,7 +4,7 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import rdp
+from . import rdp, vifilter
 from .ctrl import apply_changes
 from .features import SWITCHES, SwitchRequest, find_switch_requests
 from .modes import find_mode_tables
@@ -31,6 +31,7 @@ RDP_DITHER_LABELS = {
     RDP_COLOR_DITHER | RDP_ALPHA_DITHER: "colour and alpha",
 }
 GUARD_KEEP = 0xFFFF0000
+DEDITHER = "dedither"
 Change = tuple[int, int, int]
 
 
@@ -76,6 +77,7 @@ class RegionEdit:
     modes_changed: int
     requests: tuple[SwitchRequest, ...]
     microcodes: int
+    filters: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,13 +123,22 @@ def edit_region(data: bytes, settings: Settings) -> RegionEdit:
     switches = tuple(
         (r.guard, _word(data, r.guard), _word(data, r.guard) & GUARD_KEEP) for r in requests
     )
-    edited = _write(data, (*table, *switches))
+    caves = [_dead_block(data, r) for r in requests if r.switch == DEDITHER]
+    switched, filters = vifilter.install(
+        _write(data, (*table, *switches)), caves, vifilter.mask_for(settings)
+    )
     microcodes = rdp.count_microcodes(data) if settings.rdp_bits else 0
     dithered, rdp_changes = (
-        rdp.disable_dither(edited, settings.rdp_bits) if microcodes else (edited, ())
+        rdp.disable_dither(switched, settings.rdp_bits) if microcodes else (switched, ())
     )
-    changes = (*table, *switches, *rdp_changes)
-    return RegionEdit(dithered, changes, len(entries), len(table), requests, microcodes)
+    changes = (*table, *switches, *filters, *rdp_changes)
+    stores = sum(1 for _, before, _ in filters if before >> 26 == vifilter.OP_SW)
+    return RegionEdit(dithered, changes, len(entries), len(table), requests, microcodes, stores)
+
+
+def _dead_block(data: bytes, request: SwitchRequest) -> tuple[int, int]:
+    target = vifilter.branch_target(request.branch, _word(data, request.branch))
+    return request.branch + 8, target
 
 
 def describe(edits: Sequence[RegionEdit], settings: Settings) -> str:
@@ -145,4 +156,8 @@ def describe(edits: Sequence[RegionEdit], settings: Settings) -> str:
         label = RDP_DITHER_LABELS[settings.rdp_bits]
         parts.append(f"{label} dither forced off in {microcodes} {noun}")
     parts.extend([NO_MICROCODE_NOTE] if settings.rdp_bits and not microcodes else [])
+    stores = sum(edit.filters for edit in edits)
+    parts.extend(
+        [f"{stores} VI control {'store' if stores == 1 else 'stores'} filtered"] if stores else []
+    )
     return ", ".join(parts)
