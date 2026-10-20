@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import fields, replace
 
-from . import bitlz, bytelz, flaglz, gzmember, lzss, mioblock, prefixlz, rarezip, refpack, rnc
+from . import bitlz, bytelz, flaglz, gzmember, lzss, mioblock, prefixlz, rarezip, refpack, rnc, yaz0
 from .byteorder import swap, to_big_endian
 from .checksum import verify
 from .edits import (
@@ -50,6 +50,7 @@ PACKERS = (
     flaglz.edit_streams,
     mioblock.edit_chains,
     prefixlz.edit_streams,
+    yaz0.edit_files,
 )
 
 
