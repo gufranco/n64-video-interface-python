@@ -145,7 +145,8 @@ jobs:
           import sys
           from pathlib import Path
 
-          from n64_video_interface import vi
+          from n64_video_interface import audit, reseal
+          from n64_video_interface.checksum import END
 
           head = bytearray(0x40)
           head[0:4] = b"\x80\x37\x12\x40"
@@ -154,7 +155,7 @@ jobs:
           head[0x3B] = ord("N")
           head[0x3C:0x3E] = b"ZZ"
           head[0x3E] = ord("E")
-          body = bytearray(bytes(head) + bytes(vi.CHECKSUM_END + 0x2000 - 0x40))
+          body = bytearray(bytes(head) + bytes(END + 0x2000 - 0x40))
           entry = struct.pack(
               ">20I",
               0x02000000,
@@ -170,7 +171,7 @@ jobs:
               *(0x00000280, 0x00000400, 0x002501FF, 0x000E0204, 0x00000002) * 2,
           )
           body[0x2000 : 0x2000 + len(entry)] = entry
-          Path("sample.z64").write_bytes(vi.reseal(bytes(body), "6102"))
+          Path("sample.z64").write_bytes(reseal(bytes(body), "6102"))
 
           def run(*args):
               done = subprocess.run(["n64vi", *args], capture_output=True, text=True)
@@ -183,7 +184,7 @@ jobs:
           if run("patch", "sample.z64", "--no-aa", "--output", "sharp.z64").returncode != 0:
               print("::error title=patch failed::")
               sys.exit(1)
-          if vi.audit(Path("sharp.z64").read_bytes()).antialiasing_on:
+          if audit(Path("sharp.z64").read_bytes()).antialiasing_on:
               print("::error title=Anti-aliasing survived the patch::")
               sys.exit(1)
           if run("ips", "sample.z64", "--no-aa", "--output", "sharp.ips").returncode != 0:
