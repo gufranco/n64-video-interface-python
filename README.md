@@ -190,7 +190,7 @@ The check covered all 292 USA retail dumps in the Mr. Backup set, under mupen64p
 
 - Every one of the 292 is patched with anti-aliasing, divot, gamma dithering and dedither all switched off.
 - Each patched ROM booted and ran for 25 seconds. The VI control value it settled on had those four switched off: `0x3202` in 217 games, `0x3242` in 53, `0x320A` or `0x324A` in 14 that keep their own gamma correction, `0x0202` in HAL's three games, and the 32-bit equivalents in the remaining 5.
-- With the speed limiter on, the patched games drew frames at the same rate as the originals. Two games, Wetrix and World Driver Championship, drew fewer. A copy of Wetrix with one byte changed outside anything the game reads drew fewer too, which points at the emulator keying its per-game settings to the file rather than at the patch; World Driver Championship has not been through that control.
+- With the speed limiter on, the patched games drew frames at the same rate as the originals. Two games, Wetrix and World Driver Championship, drew fewer, and so did a copy of each with one byte changed outside anything the game reads. That points at the emulator keying its per-game settings to the file, not at the patch.
 
 Before-and-after pictures were taken with angrylion, which reproduces the VI filters, from one deterministic run per pair: the game is stopped at the same frame, only the setting changes, and a pair is kept only when the console's memory differs nowhere except in that setting.
 
