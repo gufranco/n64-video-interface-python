@@ -148,8 +148,8 @@ def cost(token: Token) -> int:
     return sum(SHORT_BITS if p <= SHORT_LIMIT else LONG_BITS for p in _pieces(token.length))
 
 
-def _copy_bits(length: int) -> int:
-    return cost(Copy(1, length))
+def _copy_bits(distance: int, length: int) -> int:
+    return cost(Copy(distance, length))
 
 
 SHAPE = lzparse.Shape(WINDOW, MIN_COPY, MAX_COPY, CANDIDATES, LITERAL_BITS, _copy_bits)

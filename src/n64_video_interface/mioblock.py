@@ -28,7 +28,7 @@ COPY_BITS = 17
 MAX_SIZE = 0x800000
 NOUN = "MIO0 block chain"
 NO_ROOM = "a changed MIO0 block chain no longer fits its slots"
-SHAPE = lzparse.Shape(WINDOW, MIN_COPY, MAX_COPY, CANDIDATES, LITERAL_BITS, lambda _: COPY_BITS)
+SHAPE = lzparse.Shape(WINDOW, MIN_COPY, MAX_COPY, CANDIDATES, LITERAL_BITS, lambda _, __: COPY_BITS)
 Unit = Literals | Copy
 
 

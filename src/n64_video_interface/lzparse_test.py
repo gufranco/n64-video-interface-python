@@ -9,7 +9,7 @@ SHAPE = lzparse.Shape(
     max_copy=5,
     candidates=8,
     literal_bits=9,
-    copy_bits=lambda length: 17,
+    copy_bits=lambda distance, length: 17,
 )
 
 
@@ -44,6 +44,17 @@ class TestTheParse:
 
         # Assert
         assert tokens == (Copy(5, 5),)
+
+    def test_a_run_header_makes_a_cheap_copy_beat_a_literal_run(self):
+        # Arrange
+        shape = lzparse.Shape(0x10, 2, 5, 8, 8, lambda distance, length: 9, 8, 4)
+        data = b"ab" + b"ab"
+
+        # Act
+        tokens = lzparse.optimal(data, 0, len(data), shape)
+
+        # Assert
+        assert tokens == (Literals(b"ab"), Copy(2, 2))
 
     @pytest.mark.parametrize("data", [b"", b"a", b"aaaaaaaaaaaaaaaaaaaa"])
     def test_any_data_parses_back_to_itself(self, data):

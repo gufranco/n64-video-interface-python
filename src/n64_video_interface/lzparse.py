@@ -15,7 +15,9 @@ class Shape:
     max_copy: int
     candidates: int
     literal_bits: int
-    copy_bits: Callable[[int], int]
+    copy_bits: Callable[[int, int], int]
+    run_header: int = 0
+    run_limit: int = 1
 
 
 def merged(tokens: Sequence[Token]) -> tuple[Token, ...]:
@@ -59,14 +61,18 @@ def optimal(data: bytes, start: int, end: int, shape: Shape) -> tuple[Token, ...
     size = end - start
     best = [0] + [UNREACHED] * size
     back: list[Copy | None] = [None] * (size + 1)
+    run = [0] * (size + 1)
     for offset in range(size):
         at = start + offset
-        if best[offset] + shape.literal_bits < best[offset + 1]:
-            best[offset + 1], back[offset + 1] = best[offset] + shape.literal_bits, None
+        header = shape.run_header if run[offset] % shape.run_limit == 0 else 0
+        if best[offset] + shape.literal_bits + header < best[offset + 1]:
+            best[offset + 1] = best[offset] + shape.literal_bits + header
+            back[offset + 1], run[offset + 1] = None, run[offset] + 1
         limit = min(size - offset, shape.max_copy)
         for copy in _matches(data, at, limit, index, shape):
-            total = best[offset] + shape.copy_bits(copy.length)
+            total = best[offset] + shape.copy_bits(copy.distance, copy.length)
             if total < best[offset + copy.length]:
                 best[offset + copy.length], back[offset + copy.length] = total, copy
+                run[offset + copy.length] = 0
         index.setdefault(data[at : at + shape.min_copy], []).append(at)
     return _trace(back, data, start)
