@@ -26,6 +26,8 @@ OP_ORI = 0x0D
 POINT_SAMPLE = 0x0200
 NOP = 0
 TARGET_REACH = 0x8000
+RELOCATION_REACH = 0x100
+UNRELOCATED_MASK = 0xFFE0FFFF
 Change = tuple[int, int, int]
 
 
@@ -78,6 +80,11 @@ def _targeted(data: bytes, at: int) -> bool:
     )
 
 
+def relocatable(data: bytes, at: int) -> bool:
+    window = range(max(0, at - RELOCATION_REACH), min(len(data) - 3, at + RELOCATION_REACH), 4)
+    return any(_word(data, here) & UNRELOCATED_MASK == OP_LUI << 26 for here in window)
+
+
 def _reads(word: int, register: int) -> bool:
     return register in ((word >> 21) & REGISTER, (word >> 16) & REGISTER)
 
@@ -106,7 +113,7 @@ def _site_at(data: bytes, store: int) -> Site | None:
     word = _word(data, store)
     value, base = (word >> 16) & REGISTER, (word >> 21) & REGISTER
     load = _feeds(data, store, value, base)
-    if load is None:
+    if load is None or relocatable(data, store):
         return None
     after = _word(data, store + 4)
     move = _written(after) in (value, base)
@@ -225,7 +232,12 @@ def install(
 ) -> tuple[bytes, tuple[Change, ...]]:
     if mask is None:
         return data, ()
-    unreached = [c for c in caves if not any(_targeted(data, at) for at in range(c[0], c[1], 4))]
+    unreached = [
+        c
+        for c in caves
+        if not relocatable(data, c[0])
+        and not any(_targeted(data, at) for at in range(c[0], c[1], 4))
+    ]
     writes = _plan(data, find_sites(data), unreached, mask)
     out = bytearray(data)
     changes = tuple((offset, _word(data, offset), value) for offset, value in writes)

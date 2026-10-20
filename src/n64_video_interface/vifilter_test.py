@@ -252,6 +252,35 @@ class TestTheFilter:
 ALL = Settings(antialiasing=False, divot=False, gamma_dither=False, dither_filter=False)
 
 
+class TestRelocatableCode:
+    @pytest.mark.parametrize(
+        "at", [SWAP_AT + 0x40, CAVE_AT + 0x40], ids=["near the store", "near the cave"]
+    )
+    def test_code_still_waiting_for_relocation_is_left_alone(self, at):
+        # Arrange
+        data = bytearray(region())
+        struct.pack_into(">I", data, at, 0x3C180000)
+
+        # Act
+        patched, changes = vifilter.install(
+            bytes(data), [(CAVE_AT, CAVE_AT + 28)], vifilter.mask_for(ALL)
+        )
+
+        # Assert
+        assert (patched, changes) == (bytes(data), ())
+
+    def test_a_lui_with_a_real_upper_half_is_not_a_relocation(self):
+        # Arrange
+        data = bytearray(region())
+        struct.pack_into(">I", data, SWAP_AT + 0x40, 0x3C188005)
+
+        # Act
+        relocatable = vifilter.relocatable(bytes(data), SWAP_AT)
+
+        # Assert
+        assert relocatable is False
+
+
 class TestTheLoadEntry:
     def test_a_store_that_cannot_move_is_filtered_where_the_value_is_loaded(self):
         # Arrange
