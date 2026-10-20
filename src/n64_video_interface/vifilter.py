@@ -63,7 +63,7 @@ def _word(data: bytes, at: int) -> int:
     return int(struct.unpack_from(">I", data, at)[0])
 
 
-def _is_branch(word: int) -> bool:
+def is_branch(word: int) -> bool:
     return word >> 26 in BRANCHES or (word >> 26 == 0 and word & 0x3F in JUMP_REGISTER)
 
 
@@ -76,7 +76,7 @@ def _written(word: int) -> int | None:
     return REGISTER if op == OP_JAL else None
 
 
-def _last_write(data: bytes, at: int, register: int, lookback: int = LOOKBACK) -> int | None:
+def last_write(data: bytes, at: int, register: int, lookback: int = LOOKBACK) -> int | None:
     for before in range(at - 4, max(-4, at - 4 * lookback), -4):
         if _written(_word(data, before)) == register:
             return before
@@ -86,7 +86,7 @@ def _last_write(data: bytes, at: int, register: int, lookback: int = LOOKBACK) -
 def _targeted(data: bytes, at: int) -> bool:
     window = range(max(0, at - TARGET_REACH), min(len(data) - 3, at + TARGET_REACH), 4)
     return any(
-        _is_branch(_word(data, source))
+        is_branch(_word(data, source))
         and _word(data, source) >> 26 not in (OP_J, OP_JAL, 0)
         and branch_target(source, _word(data, source)) == at
         for source in window
@@ -104,13 +104,13 @@ def _reads(word: int, register: int) -> bool:
 
 def _straight(data: bytes, start: int, end: int) -> bool:
     inside = range(start + 4, end, 4)
-    return not any(_is_branch(_word(data, at)) for at in inside) and not any(
+    return not any(is_branch(_word(data, at)) for at in inside) and not any(
         _targeted(data, at) for at in inside
     )
 
 
 def _feeds(data: bytes, store: int, value: int, base: int) -> int | None:
-    load, origin = _last_write(data, store, value), _last_write(data, store, base, BASE_LOOKBACK)
+    load, origin = last_write(data, store, value), last_write(data, store, base, BASE_LOOKBACK)
     if load is None or origin is None:
         return None
     loaded, based = _word(data, load), _word(data, origin)
@@ -126,7 +126,7 @@ def _feeds(data: bytes, store: int, value: int, base: int) -> int | None:
 def _load_site(data: bytes, store: int, value: int, base: int, load: int) -> Site | None:
     source = (_word(data, load) >> 21) & REGISTER
     after = _word(data, load + 4)
-    if _is_branch(_word(data, load - 4)) or _is_branch(after) or _targeted(data, load):
+    if is_branch(_word(data, load - 4)) or is_branch(after) or _targeted(data, load):
         return None
     if _reads(after, value) or _written(after) in (value, source):
         return None
@@ -141,7 +141,7 @@ def _site_at(data: bytes, store: int) -> Site | None:
         return None
     after = _word(data, store + 4)
     move = _written(after) in (value, base)
-    unsafe = _is_branch(_word(data, store - 4)) or _is_branch(after) or _targeted(data, store)
+    unsafe = is_branch(_word(data, store - 4)) or is_branch(after) or _targeted(data, store)
     if unsafe or (move and (_reads(after, value) or _targeted(data, store + 4))):
         return _load_site(data, store, value, base, load)
     return Site(store, value, base, after if move else None)

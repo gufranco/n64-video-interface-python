@@ -1,9 +1,10 @@
 import struct
 
 from n64_video_interface.conftest import mode_entry, routine
-from n64_video_interface.edits import Settings, describe, edit_region
+from n64_video_interface.edits import NO_TABLE, Settings, describe, edit_region
 
 SWAP_AT = 0x380
+NO_TABLE_TEXT = f"{NO_TABLE}, so anti-aliasing and the table settings are unchanged"
 
 
 class TestEditingARegion:
@@ -49,6 +50,22 @@ class TestDescribing:
 
         # Assert
         assert text == "1 of 1 mode entries changed, 1 dedither request neutralised"
+
+    def test_a_constant_written_to_the_control_register_is_counted(self):
+        # Arrange
+        region = bytearray(0x100)
+        struct.pack_into(">3I", region, 0x40, 0x3C02A440, 0x2409311E, 0xAC490000)
+        settings = Settings(antialiasing=False, divot=False, gamma_dither=False)
+        edit = edit_region(bytes(region), settings)
+
+        # Act
+        text = describe([edit], settings)
+
+        # Assert
+        assert (text, edit.data[0x44:0x48]) == (
+            f"{NO_TABLE_TEXT}, 1 VI control constant changed",
+            bytes.fromhex("2409320a"),
+        )
 
 
 class TestTheControlFilter:

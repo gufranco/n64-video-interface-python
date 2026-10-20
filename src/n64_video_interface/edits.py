@@ -4,7 +4,7 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import hal, rdp, vifilter
+from . import hal, rdp, viconst, vifilter
 from .ctrl import apply_changes
 from .features import SWITCHES, SwitchRequest, find_special_features, find_switch_requests
 from .modes import find_mode_tables
@@ -87,6 +87,7 @@ class RegionEdit:
     microcodes: int
     filters: int = 0
     setters: int = 0
+    constants: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,17 +134,20 @@ def edit_region(data: bytes, settings: Settings) -> RegionEdit:
         (r.guard, _word(data, r.guard), _word(data, r.guard) & GUARD_KEEP) for r in requests
     )
     setters = _hal_changes(data, settings, requests)
+    constants = viconst.find_constants(data, settings)
     caves = [_dead_block(data, r) for r in requests if r.switch == DEDITHER]
     switched, filters, stores = vifilter.install(
-        _write(data, (*table, *switches, *setters)), caves, vifilter.mask_for(settings)
+        _write(data, (*table, *switches, *setters, *constants)),
+        caves,
+        vifilter.mask_for(settings),
     )
     microcodes = rdp.count_microcodes(data) if settings.rdp_bits else 0
     dithered, rdp_changes = (
         rdp.disable_dither(switched, settings.rdp_bits) if microcodes else (switched, ())
     )
-    changes = (*table, *switches, *setters, *filters, *rdp_changes)
+    changes = (*table, *switches, *setters, *constants, *filters, *rdp_changes)
     found = (len(entries), len(table), requests, microcodes, stores, len(setters))
-    return RegionEdit(dithered, changes, *found)
+    return RegionEdit(dithered, changes, *found, len(constants))
 
 
 def _hal_changes(
@@ -192,6 +196,12 @@ def describe(edits: Sequence[RegionEdit], settings: Settings) -> str:
     setters = sum(edit.setters for edit in edits)
     parts.extend(
         [f"{setters} VI {'setter' if setters == 1 else 'setters'} neutralised"] if setters else []
+    )
+    constants = sum(edit.constants for edit in edits)
+    parts.extend(
+        [f"{constants} VI control {'constant' if constants == 1 else 'constants'} changed"]
+        if constants
+        else []
     )
     stores = sum(edit.filters for edit in edits)
     parts.extend(
