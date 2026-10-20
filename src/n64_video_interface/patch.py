@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields, replace
 from . import (
     bitlz,
     bytelz,
+    classlz,
     deflatechain,
     flaglz,
     gzmember,
@@ -67,6 +68,7 @@ PACKERS = (
     yaz0.edit_files,
     lzhuf.edit_streams,
     deflatechain.edit_chains,
+    classlz.edit_programs,
 )
 
 

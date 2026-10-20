@@ -105,10 +105,13 @@ Most of these settings are in the game's code, and many retail games ship that c
 | MIO0 block chains                                | the Ken Griffey Jr. games                  |
 | Prefix-coded LZ                                  | Ms. Pac-Man: Maze Madness                  |
 | LZHUF                                            | Star Wars: Shadows of the Empire           |
+| Distance-class LZ programs                       | Excitebike 64                              |
 
 A stream is only treated as one of these when it decodes to exactly its stated size, and the repacked stream has to fit where the old one was. Where the original packer left no room, the edited code is parsed again until it compresses at least as well. A stream that still does not fit is left alone, and the refusal says so.
 
 Integrity checks are handled as they were found: Banjo-Kazooie's checksums are recomputed, Perfect Dark's checksummed functions are outside anything this changes, and Super Smash Bros., which freezes when the control filter is written into its code, gets the same result from its constants and setters instead.
+
+Excitebike 64 with either RDP dither option carries an edited `F3DLX.Rej` microcode. It runs under low-level RSP and RDP emulation, and stalls after boot under mupen64plus's high-level RSP with glide64mk2. A copy with a single bit changed in microcode code that never runs stalls there too.
 
 ## Why the checksum is the hard part
 
