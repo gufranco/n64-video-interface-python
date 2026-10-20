@@ -250,3 +250,40 @@ class TestTheFilter:
 
 
 ALL = Settings(antialiasing=False, divot=False, gamma_dither=False, dither_filter=False)
+
+
+class TestTheLoadEntry:
+    def test_a_store_that_cannot_move_is_filtered_where_the_value_is_loaded(self):
+        # Arrange
+        loop_head = 0x8CCD0000
+        data = bytearray(region(before=(LOAD_CONTROL, 0x3C028005, 0x3C018005), after=loop_head))
+        struct.pack_into(">I", data, SWAP_AT + 0x10, 0x14C8FFFC)
+        load = SWAP_AT - 12
+
+        # Act
+        patched, changes = vifilter.install(
+            bytes(data), [(CAVE_AT, CAVE_AT + 16)], vifilter.mask_for(ALL)
+        )
+
+        # Assert
+        cave = [word(patched, CAVE_AT + 4 * i) for i in range(4)]
+        assert (
+            vifilter.branch_target(load, word(patched, load)),
+            cave[0],
+            cave[1] & 0xFFFF,
+            vifilter.branch_target(CAVE_AT + 8, cave[2]),
+            cave[3],
+            word(patched, SWAP_AT),
+            len(changes),
+        ) == (CAVE_AT, LOAD_CONTROL, 0xFCEB, load + 8, 0x35080200, STORE_CONTROL, 5)
+
+    def test_a_load_whose_neighbour_uses_the_value_is_not_an_entry(self):
+        # Arrange
+        data = bytearray(region(before=(LOAD_CONTROL, 0x25280001, 0x3C018005), after=0x8CCD0000))
+        struct.pack_into(">I", data, SWAP_AT + 0x10, 0x14C8FFFC)
+
+        # Act
+        sites = vifilter.find_sites(bytes(data))
+
+        # Assert
+        assert sites == ()

@@ -132,7 +132,12 @@ def edit_region(data: bytes, settings: Settings) -> RegionEdit:
         rdp.disable_dither(switched, settings.rdp_bits) if microcodes else (switched, ())
     )
     changes = (*table, *switches, *filters, *rdp_changes)
-    stores = sum(1 for _, before, _ in filters if before >> 26 == vifilter.OP_SW)
+    starts = {start for start, _ in caves}
+    stores = sum(
+        1
+        for offset, _, after in filters
+        if after >> 26 == vifilter.OP_BEQ and vifilter.branch_target(offset, after) in starts
+    )
     return RegionEdit(dithered, changes, len(entries), len(table), requests, microcodes, stores)
 
 
