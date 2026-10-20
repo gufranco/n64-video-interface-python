@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
-from . import rewindow
+from . import lzparse, rewindow
 from .bitlz import Copy, Literals, Token, expand, span, split
 from .edits import NO_TARGETS, Packed, RegionEdit, Settings, edit_region
 
@@ -34,7 +34,6 @@ LITERAL_BITS = 9
 SHORT_BITS = 17
 LONG_BITS = 25
 CANDIDATES = 512
-UNREACHED = 1 << 62
 BOOT = 0x1000
 ALIGN = 4
 MIN_SIZE = 0x40
@@ -90,16 +89,6 @@ def _group(data: bytes, at: int, produced: int) -> tuple[list[Token], int, bool]
     return tokens, at, False
 
 
-def _merged(tokens: Sequence[Token]) -> tuple[Token, ...]:
-    merged: list[Token] = []
-    for token in tokens:
-        if isinstance(token, Literals) and merged and isinstance(merged[-1], Literals):
-            merged[-1] = Literals(merged[-1].data + token.data)
-        else:
-            merged.append(token)
-    return tuple(merged)
-
-
 def decode(data: bytes, at: int) -> tuple[tuple[Token, ...], int]:
     size = int.from_bytes(data[at + 1 : at + HEADER], "big")
     tokens: list[Token] = []
@@ -113,7 +102,7 @@ def decode(data: bytes, at: int) -> tuple[tuple[Token, ...], int]:
         raise FormatError("the stream ends before its end mark") from error
     if not ended or produced != size:
         raise FormatError("the stream does not decode to its size")
-    return _merged(tokens), here - at
+    return lzparse.merged(tokens), here - at
 
 
 def _pieces(length: int) -> list[int]:
@@ -159,47 +148,15 @@ def cost(token: Token) -> int:
     return sum(SHORT_BITS if p <= SHORT_LIMIT else LONG_BITS for p in _pieces(token.length))
 
 
-def _matches(
-    data: bytes, at: int, limit: int, index: Mapping[bytes, Sequence[int]]
-) -> Iterator[Copy]:
-    longest = MIN_COPY - 1
-    for source in reversed(index.get(data[at : at + MIN_COPY], [])[-CANDIDATES:]):
-        if at - source > WINDOW or longest >= limit:
-            return
-        length = MIN_COPY
-        while length < limit and data[source + length] == data[at + length]:
-            length += 1
-        yield from (Copy(at - source, size) for size in range(longest + 1, length + 1))
-        longest = max(longest, length)
+def _copy_bits(length: int) -> int:
+    return cost(Copy(1, length))
 
 
-def _trace(back: Sequence[Copy | None], data: bytes, start: int) -> tuple[Token, ...]:
-    tokens: list[Token] = []
-    offset = len(back) - 1
-    while offset:
-        copy = back[offset]
-        tokens.append(copy if copy else Literals(data[start + offset - 1 : start + offset]))
-        offset -= copy.length if copy else 1
-    return _merged(tokens[::-1])
+SHAPE = lzparse.Shape(WINDOW, MIN_COPY, MAX_COPY, CANDIDATES, LITERAL_BITS, _copy_bits)
 
 
 def optimal(data: bytes, start: int, end: int) -> tuple[Token, ...]:
-    index: dict[bytes, list[int]] = {}
-    for at in range(max(0, start - WINDOW), start):
-        index.setdefault(data[at : at + MIN_COPY], []).append(at)
-    size = end - start
-    best = [0] + [UNREACHED] * size
-    back: list[Copy | None] = [None] * (size + 1)
-    for offset in range(size):
-        at = start + offset
-        if best[offset] + LITERAL_BITS < best[offset + 1]:
-            best[offset + 1], back[offset + 1] = best[offset] + LITERAL_BITS, None
-        for copy in _matches(data, at, min(size - offset, MAX_COPY), index):
-            if best[offset] + cost(copy) < best[offset + copy.length]:
-                best[offset + copy.length] = best[offset] + cost(copy)
-                back[offset + copy.length] = copy
-        index.setdefault(data[at : at + MIN_COPY], []).append(at)
-    return _trace(back, data, start)
+    return lzparse.optimal(data, start, end, SHAPE)
 
 
 def _stream_at(rom: bytes, at: int) -> Stream | None:
