@@ -26,12 +26,12 @@ N64VI_ROM_DIRS="/path/to/dumps" uv run pytest src/n64_video_interface/corpus_tes
 
 ## The gates
 
-| Gate | Command |
-|------|---------|
+| Gate   | Command                        |
+| ------ | ------------------------------ |
 | Format | `uv run ruff format --check .` |
-| Lint | `uv run ruff check .` |
-| Types | `uv run mypy` |
-| Tests | `uv run pytest --cov` |
+| Lint   | `uv run ruff check .`          |
+| Types  | `uv run mypy`                  |
+| Tests  | `uv run pytest --cov`          |
 
 Coverage is gated at 100% of statements and branches. `mypy` runs strict with every optional error class the
 version offers.
