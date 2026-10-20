@@ -65,9 +65,16 @@ class TestTheContainer:
             lambda s: s[:3] + b"\x03" + s[4:],
             lambda s: s[:4] + struct.pack(">I", 0) + s[8:],
             lambda s: s[:8] + struct.pack(">I", 0x7FFFFFF) + s[12:],
+            lambda s: s[:8] + struct.pack(">I", 0x10000) + s[12:],
             lambda s: s[:-1] + bytes([s[-1] ^ 0xFF]),
         ],
-        ids=["another method", "empty", "longer than the data", "packed bytes damaged"],
+        ids=[
+            "another method",
+            "empty",
+            "too large",
+            "longer than the data",
+            "packed bytes damaged",
+        ],
     )
     def test_a_header_that_does_not_hold_up_is_skipped(self, damage):
         # Arrange
@@ -184,3 +191,40 @@ class TestEditing:
 
         # Assert
         assert packed == NO_TARGETS
+
+
+class TestUncheckedPackedCrc:
+    def test_a_stream_whose_packed_crc_is_unused_is_found_by_its_contents(self):
+        # Arrange
+        stream = bytearray(optimal_stream(entry_block()))
+        struct.pack_into(">H", stream, 14, 0xBEEF)
+
+        # Act
+        found = rnc.find_streams(rom_with(bytes(stream)))
+
+        # Assert
+        assert [(s.at, s.stamp) for s in found] == [(STREAM_AT, 0xBEEF)]
+
+    def test_its_packed_crc_field_is_kept_when_it_is_rewritten(self):
+        # Arrange
+        stream = bytearray(optimal_stream(entry_block()))
+        struct.pack_into(">H", stream, 14, 0xBEEF)
+
+        # Act
+        packed = rnc.edit_streams(rom_with(bytes(stream)), Settings(antialiasing=False))
+
+        # Assert
+        assert struct.unpack_from(">H", packed.data, STREAM_AT + 14)[0] == 0xBEEF
+
+    @pytest.mark.parametrize("method", [1, 2])
+    def test_a_stream_that_neither_crc_vouches_for_is_skipped(self, method):
+        # Arrange
+        stream = bytearray(optimal_stream(entry_block()))
+        stream[3] = method
+        struct.pack_into(">HH", stream, 12, 0x1234, 0xBEEF)
+
+        # Act
+        found = rnc.find_streams(rom_with(bytes(stream)))
+
+        # Assert
+        assert found == ()

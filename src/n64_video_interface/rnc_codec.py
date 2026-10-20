@@ -141,7 +141,10 @@ def read_all(data: bytes, at: int, size: int) -> Reader:
     reader = Reader(data, at + HEADER)
     reader.advance(KEY_BITS)
     while reader.produced < size:
+        before = reader.produced
         reader.chunks = (*reader.chunks, reader.chunk())
+        if reader.produced == before:
+            raise CodecError("a chunk produced nothing")
     return reader
 
 

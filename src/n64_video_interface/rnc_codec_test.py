@@ -144,3 +144,18 @@ class TestTables:
 
         # Assert
         assert found == expected
+
+
+def test_a_chunk_that_produces_nothing_is_refused():
+    # Arrange
+    writer = rnc_codec.Writer()
+    for value, width in ((0, 2), (1, 5), (1, 4), (0, 5), (0, 5), (1, 16), (0, 1)):
+        writer.bits(value, width)
+    data = bytes(rnc_codec.HEADER) + writer.finish() + bytes(8)
+
+    # Act
+    with pytest.raises(CodecError) as caught:
+        rnc_codec.decode(data, 0, 4)
+
+    # Assert
+    assert str(caught.value) == "a chunk produced nothing"

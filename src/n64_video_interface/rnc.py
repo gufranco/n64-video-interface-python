@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import struct
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 from . import rnc2_codec, rnc2_parse, rnc_codec, rnc_parse
 from .edits import NO_TARGETS, Packed, RegionEdit, Settings, edit_region
 from .rnc2_codec import Op
-from .rnc_codec import HEADER, Chunk
+from .rnc_codec import HEADER, Chunk, CodecError
 
 MAGIC = b"RNC"
 METHODS = (1, 2)
@@ -48,6 +48,7 @@ class Stream:
     crc: int
     leeway: int
     chunks: int
+    stamp: int | None = None
 
     @property
     def body(self) -> slice:
@@ -55,7 +56,8 @@ class Stream:
 
 
 def header(stream: Stream, crc: int, body: bytes) -> bytes:
-    fields = (stream.method, stream.size, len(body), crc, crc16(body), stream.leeway, stream.chunks)
+    sealed = crc16(body) if stream.stamp is None else stream.stamp
+    fields = (stream.method, stream.size, len(body), crc, sealed, stream.leeway, stream.chunks)
     return struct.pack(LAYOUT, MAGIC, *fields)
 
 
@@ -66,9 +68,19 @@ def _stream_at(rom: bytes, at: int) -> Stream | None:
     stream = Stream(at, method, size, packed, crc, leeway, chunks)
     if method not in METHODS or not 0 < size <= MAX_SIZE or not 0 < packed <= MAX_SIZE:
         return None
-    if stream.body.stop > len(rom) or crc16(rom[stream.body]) != packed_crc:
+    if stream.body.stop > len(rom):
         return None
-    return stream
+    if crc16(rom[stream.body]) == packed_crc:
+        return stream
+    return replace(stream, stamp=packed_crc) if _unpacks(rom, stream) else None
+
+
+def _unpacks(rom: bytes, stream: Stream) -> bool:
+    try:
+        data = _decoded(rom, stream)[1][: stream.size]
+    except (CodecError, IndexError):
+        return False
+    return len(data) == stream.size and crc16(data) == stream.crc
 
 
 def find_streams(rom: bytes) -> tuple[Stream, ...]:
@@ -116,9 +128,7 @@ def _edited(
     if not edit.changes:
         return None
     body, chunks = _rebuilt(stream, tokens, edit.data)
-    fresh = Stream(
-        0, stream.method, stream.size, len(body), crc16(edit.data), stream.leeway, chunks
-    )
+    fresh = replace(stream, at=0, packed=len(body), crc=crc16(edit.data), chunks=chunks)
     replaced = header(fresh, fresh.crc, body) + body
     if len(body) > stream.packed or leeway(replaced, fresh) > leeway(rom, stream):
         return NO_ROOM
