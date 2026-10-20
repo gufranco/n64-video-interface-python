@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import fields, replace
 
-from . import bitlz, rarezip, rnc
+from . import bitlz, gzmember, rarezip, refpack, rnc
 from .byteorder import swap, to_big_endian
 from .checksum import verify
 from .edits import (
@@ -39,7 +39,13 @@ RDP_DITHER_ON = "the RDP dither can be switched off here, never back on"
 NO_MICROCODE = "no supported microcode was found, so the RDP dither cannot be changed"
 ALREADY_OFF = "this ROM has no way to switch the dedither filter on, so it is already off"
 NO_CHANGE_NEEDED = "every mode already has the requested settings"
-PACKERS = (rarezip.edit_groups, rnc.edit_streams, bitlz.edit_segments)
+PACKERS = (
+    rarezip.edit_groups,
+    rnc.edit_streams,
+    bitlz.edit_segments,
+    refpack.edit_streams,
+    gzmember.edit_members,
+)
 
 
 def _request_refusal(settings: Settings) -> str | None:

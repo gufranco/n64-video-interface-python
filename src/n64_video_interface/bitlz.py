@@ -317,19 +317,50 @@ def _bits(tokens: Sequence[Token], position: int) -> int:
     return total
 
 
-def improve(tokens: Sequence[Token], desired: bytes) -> tuple[Token, ...]:
-    result: list[Token] = []
+@dataclass(frozen=True, slots=True)
+class _Window:
+    first: int
+    end: int
+    position: int
+    stop: int
+
+
+def _windows(tokens: Sequence[Token]) -> list[_Window]:
+    windows: list[_Window] = []
     index, position = 0, 0
     while index < len(tokens):
         end, stop = index, position
         while end < len(tokens) and stop - position < IMPROVE_WINDOW:
             stop += span(tokens[end])
             end += 1
-        fresh = optimal(desired, position, stop)
-        kept = tokens[index:end]
-        result.extend(fresh if _bits(fresh, position) < _bits(kept, position) else kept)
+        windows.append(_Window(index, end, position, stop))
         index, position = end, stop
-    return tuple(result)
+    return windows
+
+
+def _price(part: Sequence[Token], position: int) -> float:
+    return _bits(part, position)
+
+
+def improve(
+    tokens: Sequence[Token], desired: bytes, before: bytes, target: float
+) -> tuple[Token, ...]:
+    windows = _windows(tokens)
+    parts = [tuple(tokens[w.first : w.end]) for w in windows]
+    total = sum(_price(part, w.position) for part, w in zip(parts, windows, strict=True))
+    changed = [
+        i
+        for i, w in enumerate(windows)
+        if desired[w.position : w.stop] != before[w.position : w.stop]
+    ]
+    for i in [*changed, *(i for i in range(len(windows)) if i not in changed)]:
+        if i not in changed and total <= target:
+            break
+        window = windows[i]
+        fresh = optimal(desired, window.position, window.stop)
+        saving = _price(parts[i], window.position) - _price(fresh, window.position)
+        parts[i], total = (fresh, total - saving) if saving > 0 else (parts[i], total)
+    return tuple(token for part in parts for token in part)
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,7 +429,10 @@ def _edited(
     edit = edit_region(expand(tokens), settings)
     if not edit.changes:
         return None
-    body = encode(improve(split(tokens, edit.data), edit.data), data[:HEADER])
+    before = expand(tokens)
+    body = encode(
+        improve(split(tokens, edit.data), edit.data, before, _bits(tokens, 0)), data[:HEADER]
+    )
     return (
         NO_ROOM if len(body) > segment.packed else (body + bytes(segment.packed - len(body)), edit)
     )

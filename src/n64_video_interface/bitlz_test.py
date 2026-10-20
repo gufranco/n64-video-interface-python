@@ -185,6 +185,21 @@ class TestParsing:
         assert (bitlz.expand(split), split[: len(expected)]) == (desired, expected)
 
 
+class TestImproving:
+    def test_windows_that_did_not_change_are_kept_once_the_stream_fits(self):
+        # Arrange
+        data = b"".join(RNG.choice((PLAIN, RNG.randbytes(8))) for _ in range(0x900))
+        original = bitlz.optimal(data, 0, len(data))
+        desired = b"Z" + data[1:]
+        edited = bitlz.split(original, desired)
+
+        # Act
+        improved = bitlz.improve(edited, desired, data, bitlz._bits(original, 0))
+
+        # Assert
+        assert (bitlz.expand(improved), improved[-3:]) == (desired, original[-3:])
+
+
 class TestPatching:
     def test_a_target_inside_a_segment_is_patched(self):
         # Arrange
