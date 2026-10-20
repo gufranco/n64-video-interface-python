@@ -16,7 +16,15 @@ def entry_block():
     return RNG.randbytes(0x80) + mode_entry() + RNG.randbytes(0x80)
 
 
-def member(data, *, name=NAME, level=9):
+TEXT = b"N64 video interface " * 64
+TEXT_CTRL = len(TEXT) + 4
+
+
+def text_block():
+    return TEXT + mode_entry() + TEXT
+
+
+def member(data, *, name=NAME, level=1):
     packer = zlib.compressobj(level, zlib.DEFLATED, -15)
     body = packer.compress(data) + packer.flush()
     head = b"\x1f\x8b\x08" + bytes([0x08 if name else 0]) + bytes(4) + b"\x02\x03"
@@ -78,20 +86,54 @@ class TestFinding:
         assert members == ()
 
 
+class TestDeflating:
+    @pytest.mark.parametrize("slack", range(2, 14))
+    def test_the_stream_fills_its_slot_exactly_and_inflates_to_the_data(self, slack):
+        # Arrange
+        data = entry_block()
+        packer = zlib.compressobj(9, zlib.DEFLATED, -15)
+        floor = len(packer.compress(data) + packer.flush(zlib.Z_SYNC_FLUSH))
+        slot = floor + slack + 20
+
+        # Act
+        stream = gzmember.deflate(data, slot)
+
+        # Assert
+        inflater = zlib.decompressobj(-15)
+        assert (len(stream), inflater.decompress(stream), inflater.eof) == (slot, data, True)
+
+    def test_a_slot_smaller_than_the_stream_has_no_fill(self):
+        # Arrange
+        data = entry_block()
+
+        # Act
+        stream = gzmember.deflate(data, 4)
+
+        # Assert
+        assert stream is None
+
+
 class TestPatching:
     def test_a_target_inside_a_member_is_patched_and_its_trailer_follows(self):
         # Arrange
-        rom = rom_with(member(RNG.randbytes(0x40)), member(entry_block()))
+        rom = rom_with(member(RNG.randbytes(0x40)), member(text_block()))
 
         # Act
         packed = gzmember.edit_members(rom, Settings(antialiasing=False))
 
         # Assert
         found = gzmember.find_members(packed.data)
-        assert (packed.where, found[1].data[0x84:0x88], found[1].name) == (
+        before = gzmember.find_members(rom)
+        assert (
+            packed.where,
+            found[1].data[TEXT_CTRL : TEXT_CTRL + 4],
+            found[1].name,
+            found[1].length,
+        ) == (
             "in 1 gzip member",
             bytes.fromhex("0000321e"),
             NAME,
+            before[1].length,
         )
 
     def test_a_member_that_no_longer_fits_is_left_alone(self):
@@ -100,7 +142,7 @@ class TestPatching:
         for _ in range(8):
             near = entry_block()
             pairs.append(near[:0x90] + bytes(4) + near[0x94:] + near)
-        rom = rom_with(member(b"".join(pairs)))
+        rom = rom_with(member(b"".join(pairs), level=9))
 
         # Act
         packed = gzmember.edit_members(rom, Settings(antialiasing=False))

@@ -17,6 +17,11 @@ LEVEL = 9
 MEMORY_LEVELS = range(1, 10)
 STRATEGIES = (zlib.Z_DEFAULT_STRATEGY, zlib.Z_FILTERED)
 NOUN = "gzip member"
+BYTE_BITS = 8
+EMPTY_CODE = (0,) * 7
+EMPTY_LENGTHS = bytes((0x00, 0x00, 0xFF, 0xFF))
+EMPTY_STORED = bytes((0x00,)) + EMPTY_LENGTHS
+TAIL_BLOCKS = 16
 NO_ROOM = "a changed gzip member no longer fits where it was"
 
 
@@ -70,21 +75,60 @@ def find_members(rom: bytes) -> tuple[Member, ...]:
     return tuple(found)
 
 
-def deflate(data: bytes) -> bytes:
+def _open_stream(data: bytes) -> bytes:
     candidates = []
     for memory in MEMORY_LEVELS:
         for strategy in STRATEGIES:
             packer = zlib.compressobj(LEVEL, zlib.DEFLATED, RAW_DEFLATE, memory, strategy)
-            candidates.append(packer.compress(data) + packer.flush())
+            candidates.append(packer.compress(data) + packer.flush(zlib.Z_SYNC_FLUSH))
     return min(candidates, key=len)
+
+
+def _packed_bits(bits: list[int]) -> bytes:
+    padded = bits + [0] * (-len(bits) % BYTE_BITS)
+    return bytes(
+        sum(bit << index for index, bit in enumerate(padded[at : at + BYTE_BITS]))
+        for at in range(0, len(padded), BYTE_BITS)
+    )
+
+
+def _tail(fixed: int, stored: bool) -> bytes:
+    bits = [0, 1, 0, *EMPTY_CODE] * fixed
+    if stored:
+        return _packed_bits([*bits, 1, 0, 0]) + EMPTY_LENGTHS
+    return _packed_bits([*bits, 1, 1, 0, *EMPTY_CODE])
+
+
+def _tails() -> dict[int, bytes]:
+    tails: dict[int, bytes] = {}
+    for fixed in range(TAIL_BLOCKS):
+        for stored in (False, True):
+            tail = _tail(fixed, stored)
+            tails.setdefault(len(tail), tail)
+    return tails
+
+
+TAILS = _tails()
+
+
+def deflate(data: bytes, size: int) -> bytes | None:
+    stream = _open_stream(data)
+    need = size - len(stream)
+    for stored in range(max(0, need) // len(EMPTY_STORED) + 1):
+        rest = need - stored * len(EMPTY_STORED)
+        if rest in TAILS:
+            return stream + EMPTY_STORED * stored + TAILS[rest]
+    return None
 
 
 def _edited(member: Member, settings: Settings) -> tuple[bytes, RegionEdit] | str | None:
     edit = edit_region(member.data, settings)
     if not edit.changes:
         return None
-    body = member.header + deflate(edit.data) + TRAILER.pack(zlib.crc32(edit.data), len(edit.data))
-    return NO_ROOM if len(body) > member.length else (body + bytes(member.length - len(body)), edit)
+    body = deflate(edit.data, member.length - len(member.header) - TRAILER.size)
+    if body is None:
+        return NO_ROOM
+    return member.header + body + TRAILER.pack(zlib.crc32(edit.data), len(edit.data)), edit
 
 
 def edit_members(rom: bytes, settings: Settings) -> Packed | str:
