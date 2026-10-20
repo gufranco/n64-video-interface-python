@@ -23,6 +23,10 @@ EMPTY_LENGTHS = bytes((0x00, 0x00, 0xFF, 0xFF))
 EMPTY_STORED = bytes((0x00,)) + EMPTY_LENGTHS
 TAIL_BLOCKS = 16
 NO_ROOM = "a changed gzip member no longer fits where it was"
+RECORD = struct.Struct(">2I")
+RECORDS = range(0x1000, 0x10000, 4)
+BOOT_END = 0x1000
+MAX_SIZE = 0x800000
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +53,10 @@ def _header_end(rom: bytes, at: int) -> int | None:
 
 def _member_at(rom: bytes, at: int) -> Member | None:
     start = _header_end(rom, at)
-    if start is None:
-        return None
+    return None if start is None else _inflated(rom, at, start)
+
+
+def _inflated(rom: bytes, at: int, start: int) -> Member | None:
     inflater = zlib.decompressobj(RAW_DEFLATE)
     window = rom[start : start + WINDOW]
     try:
@@ -65,14 +71,34 @@ def _member_at(rom: bytes, at: int) -> Member | None:
     return Member(at, rom[at:start], data, end + TRAILER.size - at)
 
 
+def _bare_at(rom: bytes, record: int) -> Member | None:
+    at, length = RECORD.unpack_from(rom, record)
+    end = at + length
+    if at < BOOT_END or length <= TRAILER.size or end > len(rom) or rom[at : at + 3] == MAGIC:
+        return None
+    if not 0 < TRAILER.unpack_from(rom, end - TRAILER.size)[1] <= MAX_SIZE:
+        return None
+    member = _inflated(rom, at, at)
+    return member if member is not None and member.length == length else None
+
+
+def _bare_members(rom: bytes) -> list[Member]:
+    candidates = (_bare_at(rom, record) for record in RECORDS if record + RECORD.size <= len(rom))
+    return [member for member in candidates if member is not None]
+
+
 def find_members(rom: bytes) -> tuple[Member, ...]:
+    return tuple(sorted({*_headed_members(rom), *_bare_members(rom)}, key=lambda m: m.at))
+
+
+def _headed_members(rom: bytes) -> list[Member]:
     found: list[Member] = []
     at = rom.find(MAGIC)
     while at >= 0:
         member = _member_at(rom, at)
         found.extend([member] if member else [])
         at = rom.find(MAGIC, at + member.length if member else at + 1)
-    return tuple(found)
+    return found
 
 
 def _open_stream(data: bytes) -> bytes:

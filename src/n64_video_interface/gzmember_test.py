@@ -16,6 +16,8 @@ def entry_block():
     return RNG.randbytes(0x80) + mode_entry() + RNG.randbytes(0x80)
 
 
+BARE_AT = 0x158D0
+RECORD_AT = 0x13B0
 TEXT = b"N64 video interface " * 64
 TEXT_CTRL = len(TEXT) + 4
 
@@ -38,6 +40,20 @@ def member(data, *, name=NAME, level=1):
 
 def rom_with(*members):
     return bytes(0x40) + b"".join(members) + bytes(0x40)
+
+
+def bare(data):
+    packer = zlib.compressobj(1, zlib.DEFLATED, -15)
+    body = packer.compress(data) + packer.flush()
+    return body + struct.pack("<2I", zlib.crc32(data), len(data))
+
+
+def rom_with_bare(data, *, record=None):
+    member = bare(data)
+    rom = bytearray(BARE_AT + len(member) + 0x40)
+    rom[BARE_AT : BARE_AT + len(member)] = member
+    rom[RECORD_AT : RECORD_AT + 8] = struct.pack(">2I", *(record or (BARE_AT, len(member))))
+    return bytes(rom)
 
 
 class TestFinding:
@@ -78,6 +94,52 @@ class TestFinding:
     def test_a_member_cut_off_by_the_end_of_the_data_is_skipped(self):
         # Arrange
         rom = member(entry_block())[:-20]
+
+        # Act
+        members = gzmember.find_members(rom)
+
+        # Assert
+        assert members == ()
+
+
+class TestFindingBareMembers:
+    def test_a_member_without_a_header_is_found_through_its_record(self):
+        # Arrange
+        data = entry_block()
+        rom = rom_with_bare(data)
+
+        # Act
+        members = gzmember.find_members(rom)
+
+        # Assert
+        assert [(m.at, m.header, m.data, m.length) for m in members] == [
+            (BARE_AT, b"", data, len(bare(data)))
+        ]
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            (BARE_AT, 4),
+            (BARE_AT, 0x40000000),
+            (0x10, 0x100),
+            (BARE_AT + 1, 0x100),
+        ],
+        ids=["shorter than a trailer", "past the end", "inside the boot code", "not a stream"],
+    )
+    def test_a_record_that_does_not_point_at_a_member_finds_nothing(self, record):
+        # Arrange
+        rom = rom_with_bare(entry_block(), record=record)
+
+        # Act
+        members = gzmember.find_members(rom)
+
+        # Assert
+        assert members == ()
+
+    def test_a_record_whose_length_differs_from_the_stream_finds_nothing(self):
+        # Arrange
+        data = entry_block()
+        rom = rom_with_bare(data, record=(BARE_AT, len(bare(data)) + 4))
 
         # Act
         members = gzmember.find_members(rom)
@@ -134,6 +196,25 @@ class TestPatching:
             bytes.fromhex("0000321e"),
             NAME,
             before[1].length,
+        )
+
+    def test_a_bare_member_is_patched_in_place_with_its_trailer(self):
+        # Arrange
+        rom = rom_with_bare(text_block())
+
+        # Act
+        packed = gzmember.edit_members(rom, Settings(antialiasing=False))
+
+        # Assert
+        found = gzmember.find_members(packed.data)
+        assert (
+            packed.where,
+            [(m.at, m.length) for m in found],
+            found[0].data[TEXT_CTRL : TEXT_CTRL + 4],
+        ) == (
+            "in 1 gzip member",
+            [(BARE_AT, len(bare(text_block())))],
+            bytes.fromhex("0000321e"),
         )
 
     def test_a_member_that_no_longer_fits_is_left_alone(self):
