@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import struct
-from typing import TYPE_CHECKING
 
 from .ctrl import apply_changes, plausible
-from .vifilter import BASE_LOOKBACK, LOOKBACK, VI_BASE, is_branch, last_write
+from .vifilter import BASE_LOOKBACK, LOOKBACK, VI_BASE, Requested, is_branch, last_write
 
 OP_ADDIU, OP_ORI, OP_LUI, OP_SW = 0x09, 0x0D, 0x0F, 0x2B
 REGISTER = 31
@@ -14,9 +13,6 @@ UPPER = 0xFFFF0000
 MODE_CONTROL = 4
 BUILT_IN = 0x10010
 Change = tuple[int, int, int]
-
-if TYPE_CHECKING:
-    from .edits import Settings
 
 
 def _word(data: bytes, at: int) -> int:
@@ -62,29 +58,34 @@ def _rewrite(data: bytes, places: tuple[int, ...], value: int) -> tuple[Change, 
     )
 
 
-def _changed(data: bytes, places: tuple[int, ...], settings: Settings) -> tuple[Change, ...]:
+def _changed(data: bytes, places: tuple[int, ...], settings: Requested) -> tuple[Change, ...]:
     if not plausible(_value(data, places)):
         return ()
     changed = apply_changes(
-        _value(data, places), dither_filter=settings.dither_filter, **settings.table
+        _value(data, places),
+        dither_filter=settings.dither_filter,
+        divot=settings.divot,
+        gamma_dither=settings.gamma_dither,
+        gamma=settings.gamma,
+        antialiasing=settings.antialiasing,
     )
     return _rewrite(data, places, changed) or ()
 
 
-def _register(data: bytes, store: int, settings: Settings) -> tuple[Change, ...]:
+def _register(data: bytes, store: int, settings: Requested) -> tuple[Change, ...]:
     _, base, value = _fields(_word(data, store))
     places = _source(data, store, value) if _based(data, store, base) else None
     return () if places is None else _changed(data, places, settings)
 
 
-def _mode(data: bytes, store: int, settings: Settings) -> tuple[Change, ...]:
+def _mode(data: bytes, store: int, settings: Requested) -> tuple[Change, ...]:
     places = _source(data, store, _fields(_word(data, store))[2])
     if places is None or len(places) == 1 or not _value(data, places) & BUILT_IN:
         return ()
     return _changed(data, places, settings)
 
 
-def find_constants(data: bytes, settings: Settings) -> tuple[Change, ...]:
+def find_constants(data: bytes, settings: Requested) -> tuple[Change, ...]:
     stores = (
         at
         for at in range(4, len(data) - 3, 4)

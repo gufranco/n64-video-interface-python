@@ -159,15 +159,24 @@ def find_sites(data: bytes) -> tuple[Site, ...]:
 
 class Requested(Protocol):
     @property
-    def antialiasing(self) -> bool | None: ...
+    def antialiasing(self) -> bool | None:
+        raise NotImplementedError
+
     @property
-    def divot(self) -> bool | None: ...
+    def divot(self) -> bool | None:
+        raise NotImplementedError
+
     @property
-    def gamma_dither(self) -> bool | None: ...
+    def gamma_dither(self) -> bool | None:
+        raise NotImplementedError
+
     @property
-    def gamma(self) -> bool | None: ...
+    def gamma(self) -> bool | None:
+        raise NotImplementedError
+
     @property
-    def dither_filter(self) -> bool | None: ...
+    def dither_filter(self) -> bool | None:
+        raise NotImplementedError
 
 
 def mask_for(settings: Requested) -> Mask | None:
