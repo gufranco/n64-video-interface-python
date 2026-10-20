@@ -114,7 +114,7 @@ def _padding_end(rom: bytes, at: int, limit: int) -> int:
     return found.start() if found else limit
 
 
-def _deflate(data: bytes) -> bytes:
+def deflate(data: bytes) -> bytes:
     candidates = []
     for memory in MEMORY_LEVELS:
         for strategy in STRATEGIES:
@@ -125,7 +125,7 @@ def _deflate(data: bytes) -> bytes:
 
 def repack(group: Group, contents: Sequence[bytes]) -> bytes | None:
     packed = b"".join(
-        _header(stream.magic, len(data)) + _deflate(data)
+        _header(stream.magic, len(data)) + deflate(data)
         for stream, data in zip(group.streams, contents, strict=True)
     )
     padded = packed + bytes(-len(packed) % ALIGN)
