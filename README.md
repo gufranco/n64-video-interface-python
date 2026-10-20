@@ -10,7 +10,7 @@
 [![CI](https://github.com/gufranco/n64-video-interface-python/actions/workflows/ci.yml/badge.svg)](https://github.com/gufranco/n64-video-interface-python/actions/workflows/ci.yml)
 [![Analysis](https://github.com/gufranco/n64-video-interface-python/actions/workflows/analysis.yml/badge.svg)](https://github.com/gufranco/n64-video-interface-python/actions/workflows/analysis.yml)
 [![Coverage](https://img.shields.io/badge/coverage-100%25%20statement%20%2B%20branch-brightgreen)](#tests)
-[![Tests](https://img.shields.io/badge/tests-160-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/tests-664-brightgreen)](#tests)
 [![Types](https://img.shields.io/badge/mypy-strict-blue)](pyproject.toml)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-zero-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE.txt)
@@ -26,7 +26,7 @@
   <a href="https://github.com/gufranco/n64-video-interface-python/issues">Issues</a>
 </p>
 
-**3** commands · **160** tests · **100%** statement and branch coverage · **zero** runtime dependencies · types checked **strict**
+**3** commands · **664** tests · **100%** statement and branch coverage · **zero** runtime dependencies · types checked **strict**
 
 ```console
 $ n64vi audit "Super Mario 64 (USA).z64"
@@ -67,16 +67,48 @@ Without installing anything, `PYTHONPATH=src python3 -m n64_video_interface` run
 
 The VI is the Video Interface, the part of the RCP that scans a framebuffer out to the display. Four of the settings that soften the picture live in a table of VI modes inside the ROM:
 
-| Setting | What it does | Switch |
-|:--------|:-------------|:-------|
-| Anti-aliasing | Blends edge pixels against their neighbours | `--no-aa` |
-| Divot filter | Fills single-pixel gaps left by anti-aliasing. Does nothing once AA is off | `--no-divot` |
-| Gamma dithering | Adds noise before gamma correction to hide banding | `--no-gamma-dither` |
-| Gamma correction | Brightens the output. Changes brightness, not sharpness | `--no-gamma` |
+| Setting          | What it does                                                               | Switch              |
+| :--------------- | :------------------------------------------------------------------------- | :------------------ |
+| Anti-aliasing    | Blends edge pixels against their neighbours                                | `--no-aa`           |
+| Divot filter     | Fills single-pixel gaps left by anti-aliasing. Does nothing once AA is off | `--no-divot`        |
+| Gamma dithering  | Adds noise before gamma correction to hide banding                         | `--no-gamma-dither` |
+| Gamma correction | Brightens the output. Changes brightness, not sharpness                    | `--no-gamma`        |
 
 The fifth is the one that matters most and the one people miss.
 
 **The dedither filter is the largest single source of blur, and it is not in the table.** It never appears there, because the game switches it on at run time through `osViSetSpecialFeatures` rather than declaring it. Clearing it means finding that call and neutralising it, which is what `--no-dither` does and why it is listed separately from the four above.
+
+### Settings that live outside the table
+
+The table and the `osViSetSpecialFeatures` call are where most games keep these settings, not where all of them do.
+
+- Some games write the control register straight from code: a loader that sets up the screen before the game is unpacked, or a game's own VI setup routine. Those constants get the same change as a table entry.
+- HAL's games build their VI mode in memory and set the control word from a constant of their own, then switch features on and off through their own routines rather than the library's.
+- When a game rebuilds the control word on every frame, the store that hands it to the hardware is filtered: the bits that were switched off are masked out of every value the game writes.
+- `--no-rdp-color-dither` and `--no-rdp-alpha-dither` reach past the VI into the graphics microcode, where the RDP's own dithering is set.
+
+## Compressed game code
+
+Most of these settings are in the game's code, and many retail games ship that code compressed. Each supported format is unpacked, edited, and packed again into the bytes it occupied, so nothing else in the ROM moves:
+
+| Format                                           | Where it appears                           |
+| :----------------------------------------------- | :----------------------------------------- |
+| Rare zip, with the `0x1172` and `0x1173` headers | Banjo-Kazooie, Perfect Dark                |
+| Size-prefixed deflate chains                     | Banjo-Tooie                                |
+| Yaz0                                             | The Legend of Zelda: Ocarina of Time       |
+| gzip members, with or without a header           | Blast Corps, Gauntlet Legends              |
+| RNC methods 1 and 2                              | Turok, WWF, All-Star Baseball, NFL QB Club |
+| The Madden bit-packed and byte-coded segments    | Madden 64 to Madden 2002                   |
+| RefPack                                          | FIFA, NHL 99, Supercross 2000              |
+| LZSS                                             | Extreme-G, Extreme-G 2                     |
+| Flag-byte LZ                                     | Mario Tennis                               |
+| MIO0 block chains                                | the Ken Griffey Jr. games                  |
+| Prefix-coded LZ                                  | Ms. Pac-Man: Maze Madness                  |
+| LZHUF                                            | Star Wars: Shadows of the Empire           |
+
+A stream is only treated as one of these when it decodes to exactly its stated size, and the repacked stream has to fit where the old one was. Where the original packer left no room, the edited code is parsed again until it compresses at least as well. A stream that still does not fit is left alone, and the refusal says so.
+
+Integrity checks are handled as they were found: Banjo-Kazooie's checksums are recomputed, Perfect Dark's checksummed functions are outside anything this changes, and Super Smash Bros., which freezes when the control filter is written into its code, gets the same result from its constants and setters instead.
 
 ## Why the checksum is the hard part
 
@@ -107,6 +139,7 @@ A refusal names its reason and writes nothing. There is no partial result and no
 - A filter change needs a request it can prove belongs to the library routine.
 - The existing checksum has to validate, otherwise the boot chip is unknown and the result could not be resealed correctly.
 - At least one byte has to actually change, so a no-op is reported as such rather than written out as a change.
+- The ROM has to be a retail dump. Prototypes, hacks, translations and homebrew are out of scope, and a patch is only claimed for what retail games have been checked against.
 - The recomputed checksum has to validate before the data is handed back.
 
 ```console
@@ -132,16 +165,16 @@ else:
 
 `safe_patch` never raises for a ROM it declines to edit. It returns a result whose `applied` is `False` and whose `reason` says why, so a caller iterating over a folder does not have to wrap every call.
 
-| Name | Returns |
-|:-----|:--------|
-| `audit(rom)` | What the ROM's video configuration currently asks for |
-| `safe_patch(rom, **settings)` | An edited ROM with the checksum resealed, or a refusal |
-| `reseal(rom, cic=None)` | The checksum recomputed, for a caller that changed the ROM some other way |
-| `find_mode_tables(rom)` | The mode entries found, for a caller doing its own analysis |
+| Name                          | Returns                                                                   |
+| :---------------------------- | :------------------------------------------------------------------------ |
+| `audit(rom)`                  | What the ROM's video configuration currently asks for                     |
+| `safe_patch(rom, **settings)` | An edited ROM with the checksum resealed, or a refusal                    |
+| `reseal(rom, cic=None)`       | The checksum recomputed, for a caller that changed the ROM some other way |
+| `find_mode_tables(rom)`       | The mode entries found, for a caller doing its own analysis               |
 
 ## Tests
 
-160 tests, 100% statement and branch coverage, gated in CI rather than asserted here. Each test file sits beside the module it tests, as `<module>_test.py`. Every ROM the suite needs is synthesised, so it passes in a fresh clone with no game files and no network.
+664 tests, 100% statement and branch coverage, gated in CI rather than asserted here. Each test file sits beside the module it tests, as `<module>_test.py`. Every ROM the suite needs is synthesised, so it passes in a fresh clone with no game files and no network.
 
 ```bash
 pytest
@@ -151,15 +184,21 @@ The matrix runs Python 3.11 through 3.13 on Linux x86_64 and arm64 and on macOS 
 
 A weekly job re-runs everything against unpinned tooling, which is what catches a linter or a type checker changing its mind about code nobody touched.
 
-## What has been verified, and what has not
+## What has been verified, and what has not (as of 2026-10-20)
 
-The mode-table layout and the dedither request pattern were established by scanning retail ROMs and requiring every candidate to satisfy several independent structural checks before being treated as a table. The checksum implementation is verified against every boot chip in the test suite.
+The check covered all 292 USA retail dumps in the Mr. Backup set, under mupen64plus 2.6.0:
 
-Patched ROMs produced by this have booted and run on real Nintendo 64 hardware.
+- Every one of the 292 is patched with anti-aliasing, divot, gamma dithering and dedither all switched off.
+- Each patched ROM booted and ran for 25 seconds. The VI control value it settled on had those four switched off: `0x3202` in 217 games, `0x3242` in 53, `0x320A` or `0x324A` in 14 that keep their own gamma correction, `0x0202` in HAL's three games, and the 32-bit equivalents in the remaining 5.
+- With the speed limiter on, the patched games drew frames at the same rate as the originals. Two games, Wetrix and World Driver Championship, drew fewer. A copy of Wetrix with one byte changed outside anything the game reads drew fewer too, which points at the emulator keying its per-game settings to the file rather than at the patch; World Driver Championship has not been through that control.
 
-What has not been established is how broadly that holds. The mode table is found by scanning rather than by reading a fixed offset, and the library has not been run against every ROM of every region. A dump whose table this cannot prove is a table is refused rather than edited, so the failure mode is a game that goes unpatched rather than one that breaks, but a game that is patched and looks wrong is still possible and has not been ruled out for every title.
+Before-and-after pictures were taken with angrylion, which reproduces the VI filters, from one deterministic run per pair: the game is stopped at the same frame, only the setting changes, and a pair is kept only when the console's memory differs nowhere except in that setting.
 
-Test before committing to a batch, and please open an issue with the title and region if a game is refused or comes out wrong. That is the fastest way for the scanner to learn a case it does not yet handle.
+Patched ROMs from earlier releases, which only edited uncompressed games, have booted and run on real Nintendo 64 hardware. The compressed-code repacks in this release have been verified in the emulator only, and a few behaviours, such as Banjo-Tooie's own checksums of its code over long play, have not been exercised.
+
+Regions other than the USA have not been run through the same check. A dump this cannot prove is safe to edit is refused rather than edited, so the failure mode is a game that goes unpatched rather than one that breaks, but a game that is patched and looks wrong is still possible.
+
+Please open an issue with the title and region if a game is refused or comes out wrong.
 
 ## License
 
